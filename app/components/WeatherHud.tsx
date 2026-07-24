@@ -202,17 +202,17 @@ export default function WeatherHud({
               {efDisplay}
             </strong>
             <div>
-              <span>Viento estimado</span>
+              <span>Rango de viento estimado</span>
               <b>
-                {snapshot.tornadoActive
-                  ? `${snapshot.tornadoWindKmh} km/h`
+                {snapshot.estimatedWindRangeKmh
+                  ? `${snapshot.estimatedWindRangeKmh[0]}–${snapshot.estimatedWindRangeKmh[1]} km/h`
                   : "Sin vórtice en superficie"}
               </b>
             </div>
           </div>
           <p className="science-note">
-            Clasificación provisional por velocidad. La escala EF real se
-            asigna después de analizar daños.
+            La escala EF real se asigna después de analizar daños. El ancho,
+            color o grado de condensación no determinan la categoría.
           </p>
         </InstrumentPanel>
       </div>
@@ -237,7 +237,11 @@ export default function WeatherHud({
               >
                 <span>{index + 1}</span>
                 <div>
-                  <strong>{STAGE_SHORT[stage]}</strong>
+                  <strong>
+                    {stage === "tornado" && !snapshot.tornadicCycle
+                      ? "Tormenta severa"
+                      : STAGE_SHORT[stage]}
+                  </strong>
                   {index === activeStage ? (
                     <small>
                       Próximo cambio en{" "}
@@ -349,4 +353,3 @@ export default function WeatherHud({
     </div>
   );
 }
-

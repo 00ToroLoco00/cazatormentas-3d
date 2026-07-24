@@ -57,11 +57,11 @@ export const STORM_CONFIG = {
   // Game-friendly fast-mode distribution. The simulation shifts these weights
   // toward weaker or stronger ratings according to the atmospheric potential.
   efWeights: {
-    EF1: 0.22,
-    EF2: 0.3,
-    EF3: 0.28,
-    EF4: 0.14,
-    EF5: 0.06,
+    EF1: 0.25,
+    EF2: 0.32,
+    EF3: 0.27,
+    EF4: 0.12,
+    EF5: 0.04,
   } satisfies Record<EfRating, number>,
 } as const;
 
@@ -73,4 +73,3 @@ export const FUTURE_SYSTEM_SLOTS = {
   additionalTornadoMorphologies: false,
   multiplayerTransport: false,
 } as const;
-

@@ -44,48 +44,61 @@ export default function RadarPanel({ snapshot }: RadarPanelProps) {
     const mapScale = 118 / WORLD_CONFIG.playableRadius;
     const mapX = size / 2 + snapshot.stormPosition.x * mapScale;
     const mapY = size / 2 + snapshot.stormPosition.z * mapScale;
+    const tornadoMapX =
+      size / 2 + snapshot.tornadoPosition.x * mapScale;
+    const tornadoMapY =
+      size / 2 + snapshot.tornadoPosition.z * mapScale;
     const stormSize = 24 + snapshot.cloudCover * 54;
 
-    context.save();
-    context.translate(mapX, mapY);
-    context.rotate(-0.33);
+    if (snapshot.stormVisible) {
+      context.save();
+      context.translate(mapX, mapY);
+      context.rotate(-0.33);
 
-    const outer = context.createRadialGradient(0, 0, 4, 0, 0, stormSize * 1.2);
-    outer.addColorStop(0, "rgba(231, 71, 51, 0.94)");
-    outer.addColorStop(0.24, "rgba(242, 184, 54, 0.9)");
-    outer.addColorStop(0.53, "rgba(91, 201, 83, 0.82)");
-    outer.addColorStop(0.82, "rgba(48, 160, 188, 0.58)");
-    outer.addColorStop(1, "rgba(48, 160, 188, 0)");
-    context.fillStyle = outer;
-    context.beginPath();
-    context.ellipse(
-      0,
-      0,
-      stormSize * (0.75 + snapshot.rainIntensity * 0.45),
-      stormSize,
-      0,
-      0,
-      Math.PI * 2,
-    );
-    context.fill();
-
-    if (snapshot.tornadicPotential > 0.54) {
-      context.strokeStyle = `rgba(247, 68, 55, ${Math.min(
-        0.95,
-        snapshot.tornadicPotential,
-      )})`;
-      context.lineWidth = 7;
-      context.beginPath();
-      context.arc(
-        -stormSize * 0.36,
-        stormSize * 0.34,
-        stormSize * 0.28,
-        -0.25,
-        Math.PI * 1.25,
+      const outer = context.createRadialGradient(
+        0,
+        0,
+        4,
+        0,
+        0,
+        stormSize * 1.2,
       );
-      context.stroke();
+      outer.addColorStop(0, "rgba(231, 71, 51, 0.94)");
+      outer.addColorStop(0.24, "rgba(242, 184, 54, 0.9)");
+      outer.addColorStop(0.53, "rgba(91, 201, 83, 0.82)");
+      outer.addColorStop(0.82, "rgba(48, 160, 188, 0.58)");
+      outer.addColorStop(1, "rgba(48, 160, 188, 0)");
+      context.fillStyle = outer;
+      context.beginPath();
+      context.ellipse(
+        0,
+        0,
+        stormSize * (0.75 + snapshot.rainIntensity * 0.45),
+        stormSize,
+        0,
+        0,
+        Math.PI * 2,
+      );
+      context.fill();
+
+      if (snapshot.tornadicPotential > 0.54) {
+        context.strokeStyle = `rgba(247, 68, 55, ${Math.min(
+          0.95,
+          snapshot.tornadicPotential,
+        )})`;
+        context.lineWidth = 7;
+        context.beginPath();
+        context.arc(
+          -stormSize * 0.36,
+          stormSize * 0.34,
+          stormSize * 0.28,
+          -0.25,
+          Math.PI * 1.25,
+        );
+        context.stroke();
+      }
+      context.restore();
     }
-    context.restore();
 
     context.fillStyle = "rgba(238, 240, 229, 0.75)";
     context.fillRect(191, 175, 4, 4);
@@ -113,7 +126,7 @@ export default function RadarPanel({ snapshot }: RadarPanelProps) {
       context.strokeStyle = "#ffffff";
       context.lineWidth = 2;
       context.beginPath();
-      context.arc(mapX, mapY, 7, 0, Math.PI * 2);
+      context.arc(tornadoMapX, tornadoMapY, 7, 0, Math.PI * 2);
       context.stroke();
     }
   }, [snapshot]);
@@ -136,4 +149,3 @@ export default function RadarPanel({ snapshot }: RadarPanelProps) {
     </div>
   );
 }
-
