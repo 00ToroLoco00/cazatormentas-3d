@@ -43,6 +43,10 @@ export interface StormProfile {
   shearPeak: number;
   capeBase: number;
   capePeak: number;
+  coreRadiusMeters: number;
+  condensationEfficiency: number;
+  debrisAvailability: number;
+  vortexWobble: number;
 }
 
 export interface WeatherSnapshot {
@@ -61,8 +65,15 @@ export interface WeatherSnapshot {
   stormVisible: boolean;
   tornadoActive: boolean;
   tornadoLifeProgress: number;
+  tornadoIntensity: number;
+  tornadoPosition: WorldPosition;
+  tornadoRadiusMeters: number;
+  condensationOpacity: number;
+  groundCirculation: number;
+  debrisIntensity: number;
   funnelOpacity: number;
   tornadoWindKmh: number;
+  estimatedWindRangeKmh: readonly [number, number] | null;
   provisionalEf: EfRating | null;
   targetEf: EfRating;
   tornadicCycle: boolean;
@@ -74,4 +85,3 @@ export interface PacingMode {
   minCycleSeconds: number;
   maxCycleSeconds: number;
 }
-

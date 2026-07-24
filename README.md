@@ -14,6 +14,9 @@ disipa.
 - Probabilidad tornádica elevada para facilitar las pruebas.
 - Intensidad determinada por potencial atmosférico y azar ponderado.
 - Tornados provisionales EF1–EF5; EF1–EF3 son más frecuentes.
+- Embudos de cono variables, condensación gradual y circulación de residuos.
+- Intensidad EF orientativa: el aspecto y el viento estimado no sustituyen el
+  análisis de daños.
 - Nubes por capas y lluvia de intensidad variable.
 - Campos, chacras, una pequeña localidad, carreteras y tendido eléctrico.
 - Cámara libre con WASD y ratón, velocidad ajustable, seguimiento y teletransporte.

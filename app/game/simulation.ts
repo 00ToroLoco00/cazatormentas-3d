@@ -142,6 +142,7 @@ const createProfile = (cycleId: number, seed: number): StormProfile => {
   );
   const tornadic = random() < tornadoChance;
   const targetEf = pickTargetEf(random, peakPotential);
+  const targetEfIndex = EF_ORDER.indexOf(targetEf);
   const [windMinimum, windMaximum] = STORM_CONFIG.efWindRanges[targetEf];
 
   const approach = randomBetween(random, -0.18, 0.18);
@@ -168,6 +169,16 @@ const createProfile = (cycleId: number, seed: number): StormProfile => {
     shearPeak,
     capeBase: randomBetween(random, 250, 800),
     capePeak,
+    // Width and visible condensation overlap substantially between ratings.
+    // EF ratings describe damage, not a tornado's dimensions or appearance.
+    coreRadiusMeters: randomBetween(
+      random,
+      3.8 + targetEfIndex * 1.3,
+      9.5 + targetEfIndex * 3,
+    ),
+    condensationEfficiency: randomBetween(random, 0.72, 1),
+    debrisAvailability: randomBetween(random, 0.48, 1),
+    vortexWobble: randomBetween(random, 0.72, 1.25),
   };
 };
 
@@ -283,18 +294,78 @@ export class WeatherSimulation {
       : progress > tornadoEnd
         ? 1
         : 0;
+    const intensification = smoothstep(0.02, 0.3, tornadoLifeProgress);
+    const weakening = 1 - smoothstep(0.7, 1, tornadoLifeProgress);
     const intensityEnvelope = tornadoActive
-      ? Math.pow(Math.sin(tornadoLifeProgress * Math.PI), 0.72)
+      ? Math.pow(intensification * weakening, 0.72)
       : 0;
+    const vortexPulse =
+      0.96 +
+      Math.sin(
+        this.simulatedSeconds * 0.19 +
+          this.profile.id * 2.17 +
+          tornadoLifeProgress * 8,
+      ) *
+        0.04;
+    const tornadoIntensity = clamp(intensityEnvelope * vortexPulse);
     const tornadoWindKmh = tornadoActive
-      ? Math.round(138 + (this.profile.targetWindKmh - 138) * intensityEnvelope)
+      ? Math.round(68 + (this.profile.targetWindKmh - 68) * tornadoIntensity)
       : 0;
-    const funnelOpacity = tornadoActive
+    const groundCirculation = tornadoActive
       ? clamp(
-          smoothstep(0, 0.12, tornadoLifeProgress) *
-            (1 - smoothstep(0.84, 1, tornadoLifeProgress)),
+          smoothstep(0.02, 0.16, tornadoLifeProgress) *
+            (1 - smoothstep(0.86, 1, tornadoLifeProgress)) *
+            Math.pow(tornadoIntensity, 0.62),
         )
       : 0;
+    const condensationOpacity = tornadoActive
+      ? clamp(
+          smoothstep(0.05, 0.22, tornadoLifeProgress) *
+            (1 - smoothstep(0.76, 1, tornadoLifeProgress)) *
+            (0.48 + tornadoIntensity * 0.52) *
+            this.profile.condensationEfficiency *
+            clamp((conditions.humidityPct - 58) / 32),
+        )
+      : 0;
+    const funnelOpacity = condensationOpacity;
+    const debrisIntensity = clamp(
+      groundCirculation *
+        this.profile.debrisAvailability *
+        smoothstep(0.2, 0.58, tornadoIntensity),
+    );
+    const widthPulse =
+      0.95 +
+      Math.sin(
+        this.simulatedSeconds * 0.12 +
+          this.profile.id * 0.71 +
+          tornadoLifeProgress * 5,
+      ) *
+        0.05 *
+        this.profile.vortexWobble;
+    const tornadoRadiusMeters = tornadoActive
+      ? this.profile.coreRadiusMeters *
+        (0.36 + tornadoIntensity * 0.64) *
+        widthPulse
+      : 0;
+    const meander = (1 - tornadoIntensity * 0.45) * this.profile.vortexWobble;
+    const tornadoPosition = {
+      x:
+        stormPosition.x +
+        Math.sin(progress * Math.PI * 5.4 + this.profile.id * 1.31) *
+          13 *
+          meander,
+      z:
+        stormPosition.z +
+        Math.cos(progress * Math.PI * 4.7 + this.profile.id * 0.83) *
+          10 *
+          meander,
+    };
+    const estimatedWindRangeKmh = tornadoActive
+      ? ([
+          Math.max(0, Math.round((tornadoWindKmh * 0.86) / 5) * 5),
+          Math.round((tornadoWindKmh * 1.14) / 5) * 5,
+        ] as const)
+      : null;
 
     return {
       cycleId: this.profile.id,
@@ -319,8 +390,15 @@ export class WeatherSimulation {
       stormVisible: progress >= 0.075 && progress <= 0.98,
       tornadoActive,
       tornadoLifeProgress,
+      tornadoIntensity,
+      tornadoPosition,
+      tornadoRadiusMeters,
+      condensationOpacity,
+      groundCirculation,
+      debrisIntensity,
       funnelOpacity,
       tornadoWindKmh,
+      estimatedWindRangeKmh,
       provisionalEf: efFromWind(tornadoWindKmh),
       targetEf: this.profile.targetEf,
       tornadicCycle: this.profile.tornadic,
