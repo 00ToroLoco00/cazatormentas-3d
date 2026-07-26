@@ -1,0 +1,22 @@
+CAZATORMENTAS 3D — NEXT SESSION
+
+Branch: feature/tornado-realism-graphics
+Changes are uncommitted. Preserve them.
+Preview: npm run dev → http://localhost:5173/
+
+Completed:
+- Continuous turbulent tornado with darker core and stronger opacity.
+- Broad rotating storm base and wall cloud above the funnel.
+- Partial rain curtain, subtle visual lightning, improved cloud connection.
+- Stronger but bounded ground dust.
+
+Next:
+1. Visually inspect one full tornado lifecycle.
+2. Tune wall-cloud alignment, rain visibility, lightning frequency, funnel/cloud
+   blending, dust size, and performance.
+3. Then improve Pampas terrain, vegetation, wet ground, and atmospheric haze.
+
+Keep Spanish UI, one active storm, natural lifecycle, rare EF4–EF5, and simulation
+logic independent from Three.js. Preserve camera, radar, and UI behavior.
+
+Latest validation passed: npm run lint, npm test, git diff --check.

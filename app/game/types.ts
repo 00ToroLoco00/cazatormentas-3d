@@ -22,6 +22,33 @@ export interface WorldPosition {
   z: number;
 }
 
+export type RotationDirection = "clockwise" | "counterclockwise";
+
+export interface StormMotion {
+  directionRadians: number;
+  speedKmh: number;
+  xKmh: number;
+  zKmh: number;
+}
+
+export interface SupercellStructure {
+  updraftPosition: WorldPosition;
+  mesocyclonePosition: WorldPosition;
+  mesocycloneStrength: number;
+  rotationDirection: RotationDirection;
+  wallCloudStrength: number;
+  inflowStrength: number;
+  inflowDirectionRadians: number;
+  ffdIntensity: number;
+  ffdPosition: WorldPosition;
+  rfdIntensity: number;
+  rfdPosition: WorldPosition;
+  rfdCutStrength: number;
+  tailCloudStrength: number;
+  tailCloudDirectionRadians: number;
+  hookStrength: number;
+}
+
 export interface StormProfile {
   id: number;
   durationSeconds: number;
@@ -33,6 +60,12 @@ export interface StormProfile {
   startZ: number;
   endX: number;
   endZ: number;
+  motionDirectionRadians: number;
+  motionSpeedKmh: number;
+  rotationDirection: RotationDirection;
+  ffdEfficiency: number;
+  rfdEfficiency: number;
+  tailCloudEfficiency: number;
   temperatureBase: number;
   temperaturePeak: number;
   humidityBase: number;
@@ -44,6 +77,7 @@ export interface StormProfile {
   capeBase: number;
   capePeak: number;
   coreRadiusMeters: number;
+  peakWindRadiusMeters: number;
   condensationEfficiency: number;
   debrisAvailability: number;
   vortexWobble: number;
@@ -62,12 +96,15 @@ export interface WeatherSnapshot {
   rainIntensity: number;
   tornadicPotential: number;
   stormPosition: WorldPosition;
+  stormMotion: StormMotion;
+  supercell: SupercellStructure;
   stormVisible: boolean;
   tornadoActive: boolean;
   tornadoLifeProgress: number;
   tornadoIntensity: number;
   tornadoPosition: WorldPosition;
   tornadoRadiusMeters: number;
+  tornadoPeakWindRadiusMeters: number;
   condensationOpacity: number;
   groundCirculation: number;
   debrisIntensity: number;

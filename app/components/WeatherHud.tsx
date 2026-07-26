@@ -256,7 +256,7 @@ export default function WeatherHud({
 
         <InstrumentPanel
           id="radar"
-          eyebrow="REFLECTIVIDAD"
+          eyebrow="RADAR DOPPLER"
           title="Radar"
           className="radar-panel"
         >

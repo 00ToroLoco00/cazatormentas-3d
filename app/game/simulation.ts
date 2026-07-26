@@ -38,6 +38,22 @@ const mulberry32 = (seed: number) => {
 const randomBetween = (random: () => number, minimum: number, maximum: number) =>
   lerp(minimum, maximum, random());
 
+const offsetFromStorm = (
+  position: { x: number; z: number },
+  directionRadians: number,
+  forwardMeters: number,
+  flankMeters: number,
+) => {
+  const forwardX = Math.cos(directionRadians);
+  const forwardZ = Math.sin(directionRadians);
+  const flankX = -forwardZ;
+  const flankZ = forwardX;
+  return {
+    x: position.x + forwardX * forwardMeters + flankX * flankMeters,
+    z: position.z + forwardZ * forwardMeters + flankZ * flankMeters,
+  };
+};
+
 const stageForProgress = (progress: number): StormStage => {
   const points = STORM_CONFIG.stageBreakpoints;
   if (progress < points.cumulogenesis) return "calma";
@@ -145,7 +161,37 @@ const createProfile = (cycleId: number, seed: number): StormProfile => {
   const targetEfIndex = EF_ORDER.indexOf(targetEf);
   const [windMinimum, windMaximum] = STORM_CONFIG.efWindRanges[targetEf];
 
-  const approach = randomBetween(random, -0.18, 0.18);
+  const motionRoll = random();
+  const motionRange =
+    motionRoll < STORM_CONFIG.motion.commonDirectionChance
+      ? STORM_CONFIG.motion.commonDirectionRadians
+      : motionRoll <
+          STORM_CONFIG.motion.commonDirectionChance +
+            STORM_CONFIG.motion.northwardDirectionChance
+        ? STORM_CONFIG.motion.northwardDirectionRadians
+        : STORM_CONFIG.motion.eastwardDirectionRadians;
+  const motionDirectionRadians = randomBetween(
+    random,
+    motionRange[0],
+    motionRange[1],
+  );
+  const motionX = Math.cos(motionDirectionRadians);
+  const motionZ = Math.sin(motionDirectionRadians);
+  const perpendicularX = -motionZ;
+  const perpendicularZ = motionX;
+  const trackRadius =
+    WORLD_CONFIG.playableRadius * STORM_CONFIG.motion.trackRadiusFraction;
+  const trackOffset = randomBetween(
+    random,
+    -WORLD_CONFIG.playableRadius * 0.18,
+    WORLD_CONFIG.playableRadius * 0.18,
+  );
+  const motionSpeedKmh = clamp(
+    randomBetween(random, 34, 52) + (shearPeak - 35) * 0.72,
+    STORM_CONFIG.motion.minimumSpeedKmh,
+    STORM_CONFIG.motion.maximumSpeedKmh,
+  );
+
   return {
     id: cycleId,
     durationSeconds,
@@ -155,10 +201,16 @@ const createProfile = (cycleId: number, seed: number): StormProfile => {
       randomBetween(random, windMinimum + 4, windMaximum),
     ),
     peakPotential,
-    startX: -WORLD_CONFIG.playableRadius * 0.72,
-    startZ: -WORLD_CONFIG.playableRadius * (0.32 + approach),
-    endX: WORLD_CONFIG.playableRadius * 0.68,
-    endZ: WORLD_CONFIG.playableRadius * (0.18 + approach),
+    startX: -motionX * trackRadius + perpendicularX * trackOffset,
+    startZ: -motionZ * trackRadius + perpendicularZ * trackOffset,
+    endX: motionX * trackRadius + perpendicularX * trackOffset,
+    endZ: motionZ * trackRadius + perpendicularZ * trackOffset,
+    motionDirectionRadians,
+    motionSpeedKmh,
+    rotationDirection: random() < 0.78 ? "clockwise" : "counterclockwise",
+    ffdEfficiency: randomBetween(random, 0.78, 1.08),
+    rfdEfficiency: randomBetween(random, 0.72, 1.12),
+    tailCloudEfficiency: randomBetween(random, 0.68, 1.08),
     temperatureBase: randomBetween(random, 20, 25),
     temperaturePeak: randomBetween(random, 29, 35),
     humidityBase: randomBetween(random, 48, 63),
@@ -176,6 +228,7 @@ const createProfile = (cycleId: number, seed: number): StormProfile => {
       3.8 + targetEfIndex * 1.3,
       9.5 + targetEfIndex * 3,
     ),
+    peakWindRadiusMeters: randomBetween(random, 11, 42),
     condensationEfficiency: randomBetween(random, 0.72, 1),
     debrisAvailability: randomBetween(random, 0.48, 1),
     vortexWobble: randomBetween(random, 0.72, 1.25),
@@ -282,6 +335,80 @@ export class WeatherSimulation {
         lerp(this.profile.startZ, this.profile.endZ, pathProgress) +
         Math.sin(progress * Math.PI * 2.2 + this.profile.id) * 24,
     };
+    const rainIntensity = clamp(
+      smoothstep(0.28, 0.55, progress) *
+        (1 - smoothstep(0.84, 0.98, progress)) *
+        (0.62 + Math.max(0, oscillation) * 0.3),
+    );
+    const motionX = Math.cos(this.profile.motionDirectionRadians);
+    const motionZ = Math.sin(this.profile.motionDirectionRadians);
+    const rotationSign =
+      this.profile.rotationDirection === "clockwise" ? -1 : 1;
+    const organization =
+      smoothstep(0.24, 0.5, progress) * (1 - decay);
+    const mesocycloneStrength = clamp(
+      organization *
+        smoothstep(0.34, 0.78, tornadicPotential) *
+        (0.65 + this.profile.peakPotential * 0.35),
+    );
+    const inflowStrength = clamp(
+      growth *
+        smoothstep(12, 64, conditions.surfaceWindKmh) *
+        (1 - decay * 0.82),
+    );
+    const ffdIntensity = clamp(
+      rainIntensity * this.profile.ffdEfficiency,
+    );
+    const rfdIntensity = clamp(
+      smoothstep(0.42, 0.64, progress) *
+        mesocycloneStrength *
+        this.profile.rfdEfficiency *
+        (1 - decay),
+    );
+    const wallCloudStrength = clamp(
+      smoothstep(0.4, 0.6, progress) *
+        mesocycloneStrength *
+        (this.profile.tornadic ? 1 : 0.58),
+    );
+    const rfdCutStrength = clamp(
+      rfdIntensity * smoothstep(0.48, 0.7, progress),
+    );
+    const tailCloudStrength = clamp(
+      wallCloudStrength *
+        inflowStrength *
+        this.profile.tailCloudEfficiency,
+    );
+    const hookStrength = clamp(
+      mesocycloneStrength *
+        rfdIntensity *
+        smoothstep(0.5, 0.7, progress),
+    );
+    const updraftPosition = offsetFromStorm(
+      stormPosition,
+      this.profile.motionDirectionRadians,
+      -STORM_CONFIG.structure.updraftOffsetMeters,
+      0,
+    );
+    const mesocyclonePosition = offsetFromStorm(
+      stormPosition,
+      this.profile.motionDirectionRadians,
+      -STORM_CONFIG.structure.mesocycloneOffsetMeters,
+      rotationSign * 10,
+    );
+    const ffdPosition = offsetFromStorm(
+      stormPosition,
+      this.profile.motionDirectionRadians,
+      STORM_CONFIG.structure.ffdForwardOffsetMeters,
+      -rotationSign * STORM_CONFIG.structure.ffdFlankOffsetMeters,
+    );
+    const rfdPosition = offsetFromStorm(
+      stormPosition,
+      this.profile.motionDirectionRadians,
+      -STORM_CONFIG.structure.rfdRearOffsetMeters,
+      rotationSign * STORM_CONFIG.structure.rfdFlankOffsetMeters,
+    );
+    const inflowDirectionRadians =
+      this.profile.motionDirectionRadians - rotationSign * (Math.PI / 3);
 
     const tornadoStart = STORM_CONFIG.stageBreakpoints.tornado;
     const tornadoEnd = 0.93;
@@ -347,15 +474,18 @@ export class WeatherSimulation {
         (0.36 + tornadoIntensity * 0.64) *
         widthPulse
       : 0;
+    const tornadoPeakWindRadiusMeters = tornadoActive
+      ? this.profile.peakWindRadiusMeters * (0.78 + tornadoIntensity * 0.22)
+      : 0;
     const meander = (1 - tornadoIntensity * 0.45) * this.profile.vortexWobble;
     const tornadoPosition = {
       x:
-        stormPosition.x +
+        mesocyclonePosition.x +
         Math.sin(progress * Math.PI * 5.4 + this.profile.id * 1.31) *
           13 *
           meander,
       z:
-        stormPosition.z +
+        mesocyclonePosition.z +
         Math.cos(progress * Math.PI * 4.7 + this.profile.id * 0.83) *
           10 *
           meander,
@@ -380,19 +510,39 @@ export class WeatherSimulation {
       ),
       conditions,
       cloudCover: clamp(0.08 + stormPulse * 0.9),
-      rainIntensity: clamp(
-        smoothstep(0.28, 0.55, progress) *
-          (1 - smoothstep(0.84, 0.98, progress)) *
-          (0.62 + Math.max(0, oscillation) * 0.3),
-      ),
+      rainIntensity,
       tornadicPotential,
       stormPosition,
+      stormMotion: {
+        directionRadians: this.profile.motionDirectionRadians,
+        speedKmh: this.profile.motionSpeedKmh,
+        xKmh: motionX * this.profile.motionSpeedKmh,
+        zKmh: motionZ * this.profile.motionSpeedKmh,
+      },
+      supercell: {
+        updraftPosition,
+        mesocyclonePosition,
+        mesocycloneStrength,
+        rotationDirection: this.profile.rotationDirection,
+        wallCloudStrength,
+        inflowStrength,
+        inflowDirectionRadians,
+        ffdIntensity,
+        ffdPosition,
+        rfdIntensity,
+        rfdPosition,
+        rfdCutStrength,
+        tailCloudStrength,
+        tailCloudDirectionRadians: inflowDirectionRadians,
+        hookStrength,
+      },
       stormVisible: progress >= 0.075 && progress <= 0.98,
       tornadoActive,
       tornadoLifeProgress,
       tornadoIntensity,
       tornadoPosition,
       tornadoRadiusMeters,
+      tornadoPeakWindRadiusMeters,
       condensationOpacity,
       groundCirculation,
       debrisIntensity,

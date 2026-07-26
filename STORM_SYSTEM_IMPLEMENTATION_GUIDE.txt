@@ -1,0 +1,360 @@
+CAZATORMENTAS 3D
+STORM FORMATION, SUPERCELL STRUCTURE, AND TORNADO IMPLEMENTATION GUIDE
+
+PURPOSE
+
+This document guides future work on the complete storm lifecycle, from
+initiation through tornado dynamics. It is written for the current developer,
+future Codex sessions, and other AI coding agents.
+
+The goal is not to copy Helicity. Use its readable gameplay presentation as a
+reference while building a scientifically grounded system for Uruguay and the
+South American Pampas.
+
+
+NON-NEGOTIABLE RULES
+
+- Keep the natural-event model. Atmospheric conditions evolve first; storms
+  emerge only when conditions and seeded randomness support them.
+- Keep one authoritative active storm.
+- Keep authoritative weather rules in app/game/simulation.ts.
+- Keep Three.js rendering in app/components/StormScene.tsx.
+- Keep radar rendering in app/components/RadarPanel.tsx.
+- Keep shared contracts in app/game/types.ts.
+- Keep timing, probabilities, dimensions, and weights in app/game/config.ts.
+- Keep player-facing UI in Spanish.
+- Keep seeded simulation deterministic and randomness injectable for tests.
+- Funnel width must not determine EF rating or maximum wind by itself.
+- Do not hard-code Northern Hemisphere tornado behavior.
+- Do not add hail, lightning, vehicles, probes, damage, multiplayer, or extra
+  tornado morphologies unless explicitly requested.
+- Do not copy Helicity names, map locations, schedules, or economy.
+- Preserve free camera, radar, HUD, simulation pacing, and one-storm behavior.
+
+
+CURRENT VISUAL BASELINE
+
+- A procedural cloud deck can cover the map as cloud cover increases.
+- One randomized procedural supercell volume forms at the simulated storm.
+- The supercell changes width, height, depth, lean, and surface billows per
+  cycle but remains stable during that cycle.
+- The tornado is a ray-marched volume using the same storm palette and related
+  procedural density approach as the cloud.
+- The tornado extends into the supercell and dissolves inside it to hide the
+  connection seam from ground, side, and overhead views.
+- Rain, a localized rain curtain, condensation wisps, and ground dust exist.
+
+Treat this as working infrastructure. Extend it instead of replacing it unless
+visual evidence shows that its architecture is the source of a defect.
+
+
+TARGET PLAYER EXPERIENCE
+
+1. CALM PHASE
+
+- Mostly open sky.
+- Atmospheric values evolve naturally.
+- Radar shows no organized storm.
+- No player control directly forces storm formation.
+
+2. CUMULOGENESIS
+
+- Map-wide clouds begin filling the sky.
+- A localized rising tower appears at the future supercell position.
+- Radar shows a small, weak reflectivity return.
+- Updraft growth depends mainly on moisture, instability, and lift.
+
+3. ORGANIZING STORM
+
+- The localized tower expands into a broad, connected storm base.
+- The cloud deck darkens and becomes more continuous.
+- The forward-flank downdraft precipitation region begins downwind of the
+  updraft.
+- Radar reflectivity grows in area and intensity.
+- Rain placement starts affecting which approach offers a clear view.
+
+4. MATURE SUPERCELL
+
+- A mesocyclone becomes organized inside the main cloud volume.
+- A lowered wall-cloud region develops beneath the mesocyclone.
+- An inflow sector remains relatively clear.
+- A tail cloud may extend from the inflow sector toward the wall cloud.
+- A rear-flank downdraft cuts into the rear side of the storm.
+- Reflectivity develops an inflow notch and, when rotation is strong enough, a
+  hook-like appendage.
+- Velocity radar shows an adjacent inbound/outbound couplet.
+
+5. TORNADOGENESIS
+
+- A funnel develops from the center of the integrated wall-cloud lowering.
+- The wall cloud must be part of the main procedural cloud density. Do not add
+  a visibly separate fake cloud-base mesh.
+- Surface circulation may begin before full condensation reaches the ground.
+- The tornado center follows the mesocyclone with limited natural meander.
+- RFD wrapping and FFD placement determine whether the tornado is rain-wrapped
+  or clearly visible.
+
+6. DISSIPATION
+
+- Tornado intensity and condensation weaken naturally.
+- Surface circulation and debris fade.
+- Wall-cloud rotation loses organization.
+- Velocity couplet and hook signature weaken.
+- Local supercell fades before the map-wide cloud deck fully clears.
+
+
+STORM INITIATION AND MOTION
+
+- Add a simulated time-of-day only if it fits the existing cycle model cleanly.
+- Favor daytime and evening initiation, but do not copy Helicity's exact hours
+  without an explicit design decision.
+- Spawn a storm near the map edge opposite its motion vector so it crosses the
+  playable area.
+- Typical Pampas storm motion may favor a southwest-to-northeast track, but
+  other motion vectors must remain possible.
+- Derive storm-relative structure from the motion vector. Never assume that
+  north, south, east, or west always represents a specific flank.
+- Shear should influence storm speed, updraft tilt, organization, and motion.
+- CAPE should influence updraft strength and potential storm intensity.
+- Moisture should influence cloud depth, precipitation, and condensation.
+
+
+AUTHORITATIVE SUPERCELL STRUCTURE
+
+The simulation should expose reusable, language-neutral structure values.
+Exact contracts may evolve, but they should represent:
+
+- stormMotion: horizontal motion vector and speed.
+- structureOrientation: storm-relative orientation in world space.
+- updraftPosition: main rising-air center.
+- mesocyclonePosition: rotating updraft center.
+- mesocycloneStrength: normalized organization/rotation.
+- rotationDirection: clockwise or counterclockwise.
+- wallCloudStrength: lowering and organization below the mesocyclone.
+- inflowStrength: air feeding the updraft.
+- inflowDirection: storm-relative clear-sector direction.
+- ffdIntensity and ffdPosition: forward-flank precipitation.
+- rfdIntensity and rfdPosition: rear-flank descending-air sector.
+- rfdCutStrength: amount of cloud/rain cleared behind the mesocyclone.
+- tailCloudStrength and tailCloudDirection.
+- hookStrength: radar hook organization.
+
+All values must derive from atmospheric state, lifecycle progress, storm
+profile, and deterministic randomness. Rendering must consume them without
+creating authoritative meteorology.
+
+
+VISUAL SUPERCELL STRUCTURE
+
+GLOBAL CLOUD DECK
+
+- Cover the map progressively during formation.
+- Begin patchy, become solid during maturity, then break during dissipation.
+- Keep moving underside texture and storm-dependent darkness.
+- Hide geometry edges at the horizon.
+
+LOCAL SUPERCELL
+
+- Remain one connected procedural volume.
+- Grow from a tower into a broad, rounded storm body.
+- Connect visually into the global deck.
+- Keep cycle-to-cycle variation within believable bounds.
+- Avoid holes, detached lobes, perfect disks, stacked rings, and hard caps.
+
+WALL CLOUD
+
+- Implement as a density lowering inside the same supercell shader.
+- Center it beneath the simulated mesocyclone.
+- Increase lowering and rotation with wallCloudStrength.
+- Use its calculated underside as the tornado attachment height.
+
+TAIL CLOUD
+
+- Implement as a connected density extension toward the inflow sector.
+- Keep it optional and strength-dependent.
+- It should visually lead toward the wall cloud, not become a detached tube.
+
+RFD CUT AND HORSESHOE
+
+- Subtract or erode cloud density behind the mesocyclone.
+- Keep the cut asymmetric and tied to RFD direction and strength.
+- A horseshoe-shaped opening may emerge at strong organization.
+- Do not guarantee this feature for every storm.
+
+PRECIPITATION
+
+- Move broad precipitation into the FFD instead of centering all rain on the
+  tornado.
+- Keep a clearer inflow notch between FFD and the rotating updraft.
+- Add finer wrapping precipitation in the RFD only when structure supports it.
+- Let motion direction determine whether the tornado becomes rain-wrapped.
+
+
+RADAR MODEL
+
+REFLECTIVITY
+
+- Begin as a small weak blob during initiation.
+- Expand and intensify with FFD precipitation.
+- Place the strongest broad return in the FFD.
+- Form an inflow notch beside the mesocyclone.
+- Wrap a narrower RFD return around the circulation as hookStrength grows.
+- Derive the display from simulation structure, not independent decoration.
+- Do not add a hail core until hail is explicitly requested.
+
+VELOCITY
+
+- Calculate radial velocity relative to the radar site.
+- Project local wind vectors onto the radar-to-sample direction.
+- Show nearby inbound and outbound values around the mesocyclone.
+- Couplets must rotate correctly when rotationDirection changes.
+- RFD winds must remain distinguishable from the tornadic couplet.
+- Do not hard-code red or green to a world-space side.
+
+
+TORNADO FORMATION AND CONNECTION
+
+- Tornado formation requires sufficient mesocyclone organization, wall-cloud
+  lowering, low-level circulation, and weighted randomness.
+- Surface circulation may precede a fully condensed funnel.
+- The visible tornado top must meet the calculated wall-cloud underside.
+- Extend tornado density a short distance inside the supercell and dissolve it
+  before its volume boundary. This hides seams from all camera angles.
+- Use the same storm-dependent color family and compatible density noise as the
+  supercell.
+- Keep a darker internal core and soft turbulent edge.
+- Keep condensation wisps subtle; avoid obvious bright dots.
+- Keep debris and dust near the ground and tied to simulated availability.
+
+
+TORNADO WIND FIELD
+
+Do not treat the tornado as a uniform circular wind value.
+
+At any world position, calculate:
+
+ground wind =
+  rotational wind
+  + radial inflow
+  + tornado translation
+  + local RFD contribution
+
+Required behavior:
+
+- A relative-lull core may exist, especially in wider tornadoes.
+- Peak winds occur in a ring outside the core, often inside the visible funnel.
+- Winds weaken outside the main circulation.
+- Translation adds to rotation on one side and subtracts on the other.
+- The additive side has stronger ground-relative winds and may extend farther.
+- The subtractive side has weaker winds closer to the core.
+- Peak-wind radius should vary independently from visible funnel width.
+- Small tornadoes may not have an obvious calm center.
+
+SOUTHERN HEMISPHERE RULE
+
+- Counterclockwise rotation usually produces an additive right side relative
+  to forward motion.
+- Clockwise rotation usually produces an additive left side.
+- Uruguay gameplay must calculate this from rotation direction and motion.
+- Never label the right side as universally strongest.
+
+Future probes, vehicles, damage, and intercept scoring should consume this wind
+field. Do not implement those systems as part of the storm-structure work
+unless explicitly requested.
+
+
+RECOMMENDED IMPLEMENTATION ORDER
+
+1. Add structure contracts to app/game/types.ts.
+2. Add timing, motion, and structure ranges to app/game/config.ts.
+3. Generate deterministic storm motion and structural profile parameters.
+4. Evolve structure values through lifecycle stages in simulation.ts.
+5. Add tests for deterministic structure, valid ranges, motion orientation,
+   rotation direction, and lifecycle timing.
+6. Update RadarPanel.tsx reflectivity from FFD/RFD/inflow structure.
+7. Add velocity radar derived from world wind vectors.
+8. Feed structure values into StormScene.tsx.
+9. Integrate wall-cloud lowering into main cloud density.
+10. Add tail-cloud density and RFD erosion.
+11. Reposition precipitation into FFD and RFD regions.
+12. Attach tornado to integrated wall-cloud underside.
+13. Implement reusable tornado wind-field sampling.
+14. Add Spanish HUD explanations only after underlying behavior is stable.
+15. Perform live visual review from ground, side, overhead, inflow, FFD, and
+    rear-flank viewpoints.
+
+
+TEST REQUIREMENTS
+
+Add deterministic tests covering:
+
+- Same seed produces identical storm motion and structure.
+- Different cycles produce bounded variation.
+- Storm enters from a map edge appropriate to its motion.
+- FFD stays on the correct storm-relative flank.
+- RFD and inflow notch occupy different sectors.
+- Mesocyclone, wall cloud, and tornado remain spatially connected.
+- Hook strength grows only after sufficient organization.
+- Velocity couplet reverses correctly with rotation direction.
+- Tornado additive side changes with rotation direction and motion.
+- EF distribution remains weighted toward EF1-EF3.
+- Funnel width remains a poor predictor of EF strength.
+- Tornado begins weak, intensifies, and weakens.
+
+Required validation for behavior or architecture changes:
+
+npm run lint
+npm test
+
+Also run npm run build for dependency, routing, deployment, or build changes.
+Run git diff --check before handoff.
+
+
+VISUAL REVIEW CHECKLIST
+
+- Cloud deck covers the map without visible borders.
+- Supercell reads as one connected storm.
+- Base has no accidental holes, spikes, stacked rings, or flat box cuts.
+- Wall cloud looks integrated, not pasted underneath.
+- Tail cloud points toward wall cloud and remains attached.
+- FFD obscures the expected approach sector.
+- Inflow sector offers a clearer tornado view.
+- RFD cut is visible only when organization supports it.
+- Tornado meets cloud correctly from ground, side, and overhead.
+- Tornado color and density match the supercell.
+- Tornado remains much smaller than the full supercell.
+- Radar structure agrees with the visible storm.
+- Frame rate remains acceptable after every shader change.
+
+
+WORKFLOW NOTES FOR FUTURE AGENTS
+
+- Read AGENTS.md before editing.
+- Inspect current changes before modifying StormScene.tsx.
+- Preserve user changes and unrelated files.
+- This checkout may require:
+
+  git --git-dir=.git-restored --work-tree=.
+
+  because the visible .git path may be an unusable mount.
+
+- Use RTK for noisy commands.
+- Do not repeat unreliable screenshot automation loops.
+- A successful build is not visual verification.
+- Prefer one focused live visual review after validation.
+- Keep handoff summaries concise: state, files, validation, remaining risk.
+
+
+DEFINITION OF DONE
+
+The storm system is complete when:
+
+- Formation follows atmospheric evolution.
+- Global deck and local supercell remain connected.
+- Mesocyclone, FFD, RFD, inflow, wall cloud, tail cloud, and hook are coherent.
+- Radar and rendering consume the same authoritative structure.
+- Tornado forms beneath the mesocyclone from the integrated cloud lowering.
+- Tornado wind asymmetry uses vectors and Southern Hemisphere rotation.
+- UI remains Spanish and accessible.
+- Existing camera, pacing, radar, and simulation behavior remain usable.
+- Tests, lint, build checks, and focused visual review pass.

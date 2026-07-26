@@ -38,6 +38,24 @@ export const WORLD_CONFIG = {
 
 export const STORM_CONFIG = {
   tornadoFrequency: 0.82,
+  motion: {
+    commonDirectionChance: 0.78,
+    northwardDirectionChance: 0.12,
+    commonDirectionRadians: [0.48, 0.92],
+    northwardDirectionRadians: [1.15, 1.55],
+    eastwardDirectionRadians: [-0.15, 0.25],
+    trackRadiusFraction: 0.78,
+    minimumSpeedKmh: 32,
+    maximumSpeedKmh: 78,
+  },
+  structure: {
+    updraftOffsetMeters: 18,
+    mesocycloneOffsetMeters: 8,
+    ffdForwardOffsetMeters: 58,
+    ffdFlankOffsetMeters: 52,
+    rfdRearOffsetMeters: 34,
+    rfdFlankOffsetMeters: 28,
+  },
   stageBreakpoints: {
     calma: 0,
     cumulogenesis: 0.08,
