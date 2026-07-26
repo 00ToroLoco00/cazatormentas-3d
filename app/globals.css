@@ -522,6 +522,33 @@ button {
   transform: translateX(-50%);
 }
 
+.radar-products {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  display: flex;
+  overflow: hidden;
+  border: 1px solid rgba(145, 203, 177, 0.2);
+  border-radius: 4px;
+  background: rgba(2, 10, 8, 0.72);
+}
+
+.radar-products button {
+  border: 0;
+  padding: 3px 5px;
+  background: transparent;
+  color: rgba(217, 233, 224, 0.58);
+  font: inherit;
+  font-size: 7px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.radar-products button.is-active {
+  background: rgba(105, 196, 178, 0.24);
+  color: #d9f0e4;
+}
+
 .radar-legend {
   position: absolute;
   right: 8px;
@@ -552,6 +579,14 @@ button {
 
 .radar-extreme {
   background: #e74733;
+}
+
+.radar-inbound {
+  background: #3eca63;
+}
+
+.radar-outbound {
+  background: #eb4840;
 }
 
 .radar-caption {
