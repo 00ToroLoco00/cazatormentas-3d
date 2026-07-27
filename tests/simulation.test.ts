@@ -43,7 +43,21 @@ test("tornado dynamics intensify and weaken within safe ranges", () => {
   assert.ok(peak.tornadoIntensity > 0.9);
   assert.ok(tornado[0].tornadoIntensity < peak.tornadoIntensity);
   assert.ok(tornado.at(-1)!.tornadoIntensity < peak.tornadoIntensity);
+  assert.ok(tornado[0].funnelReach < 0.05);
+  assert.ok(tornado.some((snapshot) => snapshot.funnelReach > 0.99));
+  assert.ok(
+    tornado
+      .filter((snapshot) => snapshot.funnelReach < 0.9)
+      .every((snapshot) => snapshot.groundCirculation === 0),
+  );
+  assert.ok(
+    tornado.some(
+      (snapshot) =>
+        snapshot.funnelReach > 0.99 && snapshot.groundCirculation > 0,
+    ),
+  );
   assert.ok(peak.tornadoRadiusMeters > 0);
+  assert.ok(peak.funnelReach >= 0 && peak.funnelReach <= 1);
   assert.ok(peak.condensationOpacity >= 0 && peak.condensationOpacity <= 1);
   assert.ok(peak.groundCirculation >= 0 && peak.groundCirculation <= 1);
   assert.ok(peak.debrisIntensity >= 0 && peak.debrisIntensity <= 1);
