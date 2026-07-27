@@ -101,6 +101,7 @@ export interface WeatherSnapshot {
   stormVisible: boolean;
   tornadoActive: boolean;
   tornadoLifeProgress: number;
+  funnelReach: number;
   tornadoIntensity: number;
   tornadoPosition: WorldPosition;
   tornadoRadiusMeters: number;

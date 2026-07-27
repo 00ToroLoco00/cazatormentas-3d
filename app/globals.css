@@ -603,6 +603,33 @@ button {
   gap: 5px;
 }
 
+.storm-guide {
+  display: grid;
+  margin: 0;
+  gap: 7px;
+}
+
+.storm-guide div {
+  padding: 8px 9px;
+  border-left: 2px solid rgba(105, 196, 178, 0.45);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.storm-guide dt {
+  margin-bottom: 3px;
+  color: var(--teal);
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+}
+
+.storm-guide dd {
+  margin: 0;
+  color: #aebdb6;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
 .caption-dot {
   width: 5px;
   height: 5px;

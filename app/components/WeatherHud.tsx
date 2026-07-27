@@ -270,6 +270,32 @@ export default function WeatherHud({
             </span>
           </div>
         </InstrumentPanel>
+
+        <InstrumentPanel
+          id="lectura-tormenta"
+          eyebrow="GUÍA DE CAZA"
+          title="Leer la tormenta"
+          defaultCollapsed
+        >
+          <dl className="storm-guide">
+            <div>
+              <dt>REF</dt>
+              <dd>Intensidad de precipitación. El gancho indica RFD envolviendo la rotación.</dd>
+            </div>
+            <div>
+              <dt>VEL</dt>
+              <dd>Rojo y verde juntos señalan rotación; no todo par es un tornado.</dd>
+            </div>
+            <div>
+              <dt>FFD</dt>
+              <dd>Lluvia fuerte delante de la tormenta. Reduce la visibilidad.</dd>
+            </div>
+            <div>
+              <dt>RFD e inflow</dt>
+              <dd>RFD envuelve desde atrás. Inflow suele dar vista más limpia del vórtice.</dd>
+            </div>
+          </dl>
+        </InstrumentPanel>
       </div>
 
       <div className="camera-hint">

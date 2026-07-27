@@ -12,6 +12,7 @@ import {
   initialWeatherSnapshot,
 } from "../game/simulation";
 import type { WeatherSnapshot } from "../game/types";
+import { createPampasMap } from "./createPampasMap";
 
 export type CameraMode = "libre" | "seguir";
 
@@ -44,10 +45,12 @@ const createTornadoVolumeMaterial = () => {
       cameraLocal: { value: new THREE.Vector3() },
       time: { value: 0 },
       intensity: { value: 0 },
+      funnelReach: { value: 0 },
       condensation: { value: 0 },
       baseRadiusRatio: { value: 0.04 },
       cloudBaseRatio: { value: 0.86 },
       storminess: { value: 0 },
+      cloudColor: { value: new THREE.Color(0x596263) },
     },
     vertexShader: `
       varying vec3 vPosition;
@@ -58,13 +61,17 @@ const createTornadoVolumeMaterial = () => {
     `,
     fragmentShader: `
       varying vec3 vPosition;
+      uniform mat4 modelViewMatrix;
+      uniform mat4 projectionMatrix;
       uniform vec3 cameraLocal;
       uniform float time;
       uniform float intensity;
+      uniform float funnelReach;
       uniform float condensation;
       uniform float baseRadiusRatio;
       uniform float cloudBaseRatio;
       uniform float storminess;
+      uniform vec3 cloudColor;
 
       float random3(vec3 point) {
         point = fract(point * 0.1031);
@@ -105,6 +112,12 @@ const createTornadoVolumeMaterial = () => {
 
       float funnelDensity(vec3 point) {
         float height = point.y + 0.5;
+        float descendingTip = 1.0 - funnelReach;
+        float descentMask = smoothstep(
+          descendingTip,
+          descendingTip + 0.045,
+          height
+        );
         float visibleHeight = clamp(
           height / max(cloudBaseRatio, 0.01),
           0.0,
@@ -146,7 +159,8 @@ const createTornadoVolumeMaterial = () => {
             radialShape + broadBillow * 0.032 + fineBillow * 0.012
           ) *
           groundConnection *
-          cloudDissolve;
+          cloudDissolve *
+          descentMask;
       }
 
       vec2 intersectBox(vec3 origin, vec3 direction) {
@@ -172,6 +186,8 @@ const createTornadoVolumeMaterial = () => {
         float stepLength = rayLength / 30.0;
         float jitter = random3(vec3(gl_FragCoord.xy, time)) * stepLength;
         vec4 accumulated = vec4(0.0);
+        vec3 surfacePoint = vec3(0.0);
+        bool foundSurface = false;
 
         for (int index = 0; index < 30; index += 1) {
           vec3 point =
@@ -179,33 +195,40 @@ const createTornadoVolumeMaterial = () => {
             rayDirection * (rayStart + jitter + float(index) * stepLength);
           float density = funnelDensity(point);
           if (density > 0.01) {
-            vec3 cloudColor = mix(
-              vec3(0.33, 0.38, 0.39),
-              vec3(0.2, 0.235, 0.24),
-              storminess
+            vec3 sampleColor = mix(
+              cloudColor * 1.18,
+              cloudColor * 0.92,
+              density * (0.52 + storminess * 0.18)
             );
-            vec3 sampleColor = cloudColor;
-            sampleColor *=
-              1.05 - density * (0.22 + storminess * 0.12);
             float sampleAlpha =
-              (1.0 - exp(-density * stepLength * 12.0)) *
+              (1.0 - exp(-density * stepLength * 20.0)) *
               condensation *
               (0.72 + intensity * 0.28);
             accumulated.rgb +=
               (1.0 - accumulated.a) * sampleColor * sampleAlpha;
             accumulated.a += (1.0 - accumulated.a) * sampleAlpha;
+            if (!foundSurface && accumulated.a >= 0.08) {
+              surfacePoint = point;
+              foundSurface = true;
+            }
           }
           if (accumulated.a > 0.97) break;
         }
 
-        if (accumulated.a < 0.015) discard;
-        gl_FragColor = accumulated;
+        if (!foundSurface) discard;
+        vec4 surfaceClip =
+          projectionMatrix * modelViewMatrix * vec4(surfacePoint, 1.0);
+        gl_FragDepth = surfaceClip.z / surfaceClip.w * 0.5 + 0.5;
+        gl_FragColor = vec4(
+          accumulated.rgb / max(accumulated.a, 0.001),
+          1.0
+        );
       }
     `,
-    transparent: true,
-    depthWrite: false,
+    transparent: false,
+    depthWrite: true,
     depthTest: true,
-    side: THREE.BackSide,
+    side: THREE.FrontSide,
     blending: THREE.NormalBlending,
   });
   material.forceSinglePass = true;
@@ -221,32 +244,187 @@ const particleVertexShader = `
   }
 `;
 
-const createVortexParticleMaterial = (
-  color: number,
-  initialSize: number,
-) =>
-  new THREE.ShaderMaterial({
+const createGroundDebrisVolumeMaterial = () => {
+  const material = new THREE.ShaderMaterial({
     uniforms: {
-      color: { value: new THREE.Color(color) },
-      opacity: { value: 0 },
-      pointSize: { value: initialSize },
+      cameraLocal: { value: new THREE.Vector3() },
+      time: { value: 0 },
+      intensity: { value: 0 },
+      debris: { value: 0 },
+      circulation: { value: 0 },
+      rain: { value: 0 },
+      fogAmount: { value: 0 },
+      fogColor: { value: new THREE.Color(0xb8c2c7) },
+      motionDirection: { value: new THREE.Vector2(1, 0) },
     },
-    vertexShader: particleVertexShader,
-    fragmentShader: `
-      uniform vec3 color;
-      uniform float opacity;
+    vertexShader: `
+      varying vec3 vPosition;
       void main() {
-        float radius = length(gl_PointCoord - vec2(0.5)) * 2.0;
-        float edge = 1.0 - smoothstep(0.38, 1.0, radius);
-        if (edge < 0.02) discard;
-        gl_FragColor = vec4(color, opacity * edge);
+        vPosition = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vPosition;
+      uniform vec3 cameraLocal;
+      uniform float time;
+      uniform float intensity;
+      uniform float debris;
+      uniform float circulation;
+      uniform float rain;
+      uniform float fogAmount;
+      uniform vec3 fogColor;
+      uniform vec2 motionDirection;
+
+      float random3(vec3 point) {
+        point = fract(point * 0.1031);
+        point += dot(point, point.yzx + 33.33);
+        return fract((point.x + point.y) * point.z);
+      }
+
+      float noise3(vec3 point) {
+        vec3 cell = floor(point);
+        vec3 blend = fract(point);
+        blend = blend * blend * (3.0 - 2.0 * blend);
+        return mix(
+          mix(
+            mix(random3(cell), random3(cell + vec3(1.0, 0.0, 0.0)), blend.x),
+            mix(
+              random3(cell + vec3(0.0, 1.0, 0.0)),
+              random3(cell + vec3(1.0, 1.0, 0.0)),
+              blend.x
+            ),
+            blend.y
+          ),
+          mix(
+            mix(
+              random3(cell + vec3(0.0, 0.0, 1.0)),
+              random3(cell + vec3(1.0, 0.0, 1.0)),
+              blend.x
+            ),
+            mix(
+              random3(cell + vec3(0.0, 1.0, 1.0)),
+              random3(cell + vec3(1.0, 1.0, 1.0)),
+              blend.x
+            ),
+            blend.y
+          ),
+          blend.z
+        );
+      }
+
+      float debrisDensity(vec3 point) {
+        float height = point.y + 0.5;
+        float angle = time * (0.32 + circulation * 0.7);
+        float cosine = cos(angle);
+        float sine = sin(angle);
+        vec2 rotated = mat2(cosine, -sine, sine, cosine) * point.xz;
+        vec2 drift = motionDirection * (height * 0.08 + time * 0.006);
+        float broadNoise =
+          noise3(vec3((rotated - drift) * 5.4, height * 4.2)) - 0.5;
+        float fineNoise =
+          noise3(vec3((rotated + drift) * 12.5, height * 8.0) + 9.4) - 0.5;
+        float azimuth = atan(point.z, point.x);
+        float spiral =
+          sin(azimuth * 4.0 - time * (0.7 + intensity) + length(point.xz) * 18.0) *
+          0.035;
+        float edge =
+          0.46 +
+          broadNoise * 0.13 +
+          fineNoise * 0.045 +
+          spiral * (0.65 + circulation * 0.35) -
+          length(point.xz);
+        float groundLayer =
+          smoothstep(-0.5, -0.42, point.y) *
+          (1.0 - smoothstep(-0.08, 0.5, point.y));
+        float billows =
+          0.72 +
+          noise3(vec3(rotated * 7.0, height * 5.6) - time * 0.025) * 0.5;
+        float radialBoundary =
+          1.0 - smoothstep(0.36, 0.49, length(point.xz));
+        float topBoundary =
+          1.0 - smoothstep(0.16, 0.46, point.y);
+        return
+          smoothstep(-0.055, 0.095, edge) *
+          groundLayer *
+          billows *
+          radialBoundary *
+          topBoundary;
+      }
+
+      vec2 intersectBox(vec3 origin, vec3 direction) {
+        vec3 safeDirection = max(abs(direction), vec3(0.0001)) * sign(direction);
+        vec3 inverseDirection = 1.0 / safeDirection;
+        vec3 nearPlane = (-0.5 - origin) * inverseDirection;
+        vec3 farPlane = (0.5 - origin) * inverseDirection;
+        vec3 nearest = min(nearPlane, farPlane);
+        vec3 farthest = max(nearPlane, farPlane);
+        return vec2(
+          max(max(nearest.x, nearest.y), nearest.z),
+          min(min(farthest.x, farthest.y), farthest.z)
+        );
+      }
+
+      void main() {
+        vec3 rayDirection = normalize(vPosition - cameraLocal);
+        vec2 bounds = intersectBox(cameraLocal, rayDirection);
+        if (bounds.x > bounds.y) discard;
+
+        float rayStart = max(bounds.x, 0.0);
+        float rayLength = bounds.y - rayStart;
+        float stepLength = rayLength / 24.0;
+        float jitter = random3(vec3(gl_FragCoord.xy, time)) * stepLength;
+        vec4 accumulated = vec4(0.0);
+
+        for (int index = 0; index < 24; index += 1) {
+          vec3 point =
+            cameraLocal +
+            rayDirection * (rayStart + jitter + float(index) * stepLength);
+          float density = debrisDensity(point);
+          if (density > 0.01) {
+            float height = point.y + 0.5;
+            vec3 dryColor = mix(
+              vec3(0.095, 0.085, 0.07),
+              vec3(0.19, 0.18, 0.16),
+              smoothstep(0.0, 0.8, height)
+            );
+            vec3 wetColor = mix(
+              vec3(0.25, 0.28, 0.29),
+              vec3(0.42, 0.46, 0.48),
+              smoothstep(0.0, 0.8, height)
+            );
+            vec3 sampleColor = mix(
+              dryColor,
+              wetColor,
+              clamp(rain * 0.82, 0.0, 1.0)
+            );
+            sampleColor *= 1.0 - density * 0.22;
+            sampleColor = mix(sampleColor, fogColor, fogAmount);
+            float sampleAlpha =
+              (1.0 - exp(-density * stepLength * 15.0)) *
+              debris *
+              (0.72 + intensity * 0.28) *
+              (1.0 - fogAmount * 0.6);
+            accumulated.rgb +=
+              (1.0 - accumulated.a) * sampleColor * sampleAlpha;
+            accumulated.a += (1.0 - accumulated.a) * sampleAlpha;
+          }
+          if (accumulated.a > 0.96) break;
+        }
+
+        if (accumulated.a < 0.025) discard;
+        gl_FragColor = accumulated;
       }
     `,
     transparent: true,
     depthWrite: false,
     depthTest: true,
+    side: THREE.FrontSide,
     blending: THREE.NormalBlending,
   });
+  material.forceSinglePass = true;
+  return material;
+};
 
 const createRainMaterial = () =>
   new THREE.ShaderMaterial({
@@ -289,8 +467,8 @@ const createWorld = (scene: THREE.Scene) => {
   const skyUniforms = {
     storminess: { value: 0.1 },
     lightning: { value: 0 },
-    cloudDeck: { value: 0 },
-    time: { value: 0 },
+    hazeColor: { value: new THREE.Color(0xdfe3e4) },
+    hazeStrength: { value: 0 },
   };
   const sky = new THREE.Mesh(
     new THREE.SphereGeometry(WORLD_CONFIG.visualRadius, 40, 24),
@@ -308,81 +486,22 @@ const createWorld = (scene: THREE.Scene) => {
         varying vec3 vPosition;
         uniform float storminess;
         uniform float lightning;
-        uniform float cloudDeck;
-        uniform float time;
-
-        float random2(vec2 point) {
-          return fract(
-            sin(dot(point, vec2(127.1, 311.7))) * 43758.5453
-          );
-        }
-
-        float noise2(vec2 point) {
-          vec2 cell = floor(point);
-          vec2 blend = fract(point);
-          blend = blend * blend * (3.0 - 2.0 * blend);
-          return mix(
-            mix(random2(cell), random2(cell + vec2(1.0, 0.0)), blend.x),
-            mix(
-              random2(cell + vec2(0.0, 1.0)),
-              random2(cell + vec2(1.0, 1.0)),
-              blend.x
-            ),
-            blend.y
-          );
-        }
-
-        float deckNoise(vec2 point) {
-          float detail = noise2(point);
-          detail += noise2(point * 2.07 + 4.3) * 0.5;
-          detail += noise2(point * 4.03 - 2.1) * 0.25;
-          return detail / 1.75;
-        }
+        uniform vec3 hazeColor;
+        uniform float hazeStrength;
 
         void main() {
           vec3 direction = normalize(vPosition);
           float h = direction.y * 0.5 + 0.5;
-          vec3 horizon = mix(vec3(0.62, 0.72, 0.70), vec3(0.34, 0.42, 0.43), storminess);
-          vec3 zenith = mix(vec3(0.20, 0.40, 0.52), vec3(0.035, 0.06, 0.085), storminess);
+          vec3 horizon = mix(vec3(0.62, 0.72, 0.70), vec3(0.57, 0.60, 0.61), storminess);
+          vec3 zenith = mix(vec3(0.20, 0.40, 0.52), vec3(0.16, 0.20, 0.22), storminess);
           float gradient = smoothstep(0.12, 0.86, h);
           vec3 color = mix(horizon, zenith, gradient);
 
-          float deckGrowth = smoothstep(0.08, 0.62, cloudDeck);
-          vec2 cloudCoordinates = vec2(
-            atan(direction.z, direction.x) * 1.7,
-            direction.y * 4.2
-          );
-          cloudCoordinates += vec2(time * 0.004, time * -0.0025);
-          float broadCloud = deckNoise(cloudCoordinates * 1.35);
-          float fineCloud = noise2(cloudCoordinates * 5.2 + 8.4);
-          float brokenCoverage = smoothstep(
-            mix(0.72, 0.38, deckGrowth),
-            mix(0.88, 0.6, deckGrowth),
-            broadCloud
-          );
-          float solidCoverage =
-            smoothstep(0.58, 0.92, deckGrowth) *
-            (0.78 + broadCloud * 0.22);
-          float overheadMask = smoothstep(-0.16, 0.16, direction.y);
-          float deckMask =
-            max(brokenCoverage, solidCoverage) *
-            deckGrowth *
-            overheadMask;
-          vec3 cloudLight = vec3(0.43, 0.48, 0.49);
-          vec3 cloudDark = vec3(0.105, 0.13, 0.145);
-          float undersideShade = clamp(
-            storminess * 0.72 +
-              (1.0 - direction.y) * 0.2 +
-              (1.0 - broadCloud) * 0.24,
-            0.0,
-            1.0
-          );
-          vec3 deckColor = mix(cloudLight, cloudDark, undersideShade);
-          deckColor *= 0.92 + fineCloud * 0.12;
-          color = mix(color, deckColor, clamp(deckMask, 0.0, 0.96));
-
           color += vec3(0.08, 0.055, 0.025) * pow(1.0 - h, 6.0);
           color += vec3(0.18, 0.22, 0.27) * lightning * (1.0 - gradient * 0.6);
+          float horizonHaze =
+            (1.0 - smoothstep(0.5, 0.82, h)) * hazeStrength;
+          color = mix(color, hazeColor, clamp(horizonHaze, 0.0, 0.94));
           gl_FragColor = vec4(color, 1.0);
         }
       `,
@@ -390,203 +509,168 @@ const createWorld = (scene: THREE.Scene) => {
   );
   scene.add(sky);
 
-  const terrainGeometry = new THREE.PlaneGeometry(
-    WORLD_CONFIG.visualRadius * 1.55,
-    WORLD_CONFIG.visualRadius * 1.55,
-    54,
-    54,
-  );
-  const terrainPositions = terrainGeometry.attributes.position;
-  const terrainColors = new Float32Array(terrainPositions.count * 3);
-  const terrainColor = new THREE.Color();
-  for (let index = 0; index < terrainPositions.count; index += 1) {
-    const x = terrainPositions.getX(index);
-    const y = terrainPositions.getY(index);
-    const height =
-      Math.sin(x * 0.006) * 2.4 +
-      Math.cos(y * 0.008) * 1.8 +
-      Math.sin((x + y) * 0.0035) * 2.6;
-    terrainPositions.setZ(index, height);
-    const fieldVariation =
-      Math.sin(x * 0.012) * 0.5 + Math.cos(y * 0.015) * 0.5;
-    terrainColor
-      .set(fieldVariation > 0.18 ? 0x718950 : 0x5e7845)
-      .offsetHSL(0, 0, height * 0.004 + (random() - 0.5) * 0.035);
-    terrainColors[index * 3] = terrainColor.r;
-    terrainColors[index * 3 + 1] = terrainColor.g;
-    terrainColors[index * 3 + 2] = terrainColor.b;
-  }
-  terrainGeometry.setAttribute(
-    "color",
-    new THREE.BufferAttribute(terrainColors, 3),
-  );
-  terrainGeometry.computeVertexNormals();
-  const terrain = new THREE.Mesh(
-    terrainGeometry,
-    new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      vertexColors: true,
-      roughness: 1,
-      metalness: 0,
-    }),
-  );
-  terrain.rotation.x = -Math.PI / 2;
-  terrain.receiveShadow = false;
-  scene.add(terrain);
+  createPampasMap(scene, random);
 
-  const fieldGroup = new THREE.Group();
-  const fieldColors = [
-    0x78894a, 0x9a8845, 0x667c3f, 0x9c9b61, 0x806a39, 0x708c56,
-  ];
-  for (let index = 0; index < 34; index += 1) {
-    const width = 95 + random() * 185;
-    const depth = 80 + random() * 155;
-    const field = new THREE.Mesh(
-      new THREE.PlaneGeometry(width, depth),
-      new THREE.MeshStandardMaterial({
-        color: fieldColors[index % fieldColors.length],
-        roughness: 1,
-      }),
-    );
-    field.rotation.x = -Math.PI / 2;
-    field.rotation.z = (random() - 0.5) * 0.2;
-    field.position.set(
-      (random() - 0.5) * 1750,
-      0.8 + random() * 0.3,
-      (random() - 0.5) * 1500,
-    );
-    fieldGroup.add(field);
-  }
-  scene.add(fieldGroup);
-
-  const roadMaterial = new THREE.MeshStandardMaterial({
-    color: 0x4b4d48,
-    roughness: 0.98,
-  });
-  const roadA = new THREE.Mesh(new THREE.PlaneGeometry(34, 1500), roadMaterial);
-  roadA.rotation.x = -Math.PI / 2;
-  roadA.rotation.z = 0.04;
-  roadA.position.set(105, 1.15, 25);
-  scene.add(roadA);
-  const roadB = new THREE.Mesh(new THREE.PlaneGeometry(1120, 22), roadMaterial);
-  roadB.rotation.x = -Math.PI / 2;
-  roadB.rotation.z = -0.035;
-  roadB.position.set(-20, 1.2, 135);
-  scene.add(roadB);
-
-  const lineMaterial = new THREE.MeshBasicMaterial({ color: 0xd5bd70 });
-  const lineA = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 1490), lineMaterial);
-  lineA.rotation.x = -Math.PI / 2;
-  lineA.rotation.z = 0.04;
-  lineA.position.set(105, 1.25, 25);
-  scene.add(lineA);
-
-  const structures = new THREE.Group();
-  const wallPalette = [0xd8d0b7, 0xb7c1b2, 0xc9a986, 0xe0ded1, 0x9eaaa0];
-  const addBuilding = (
-    x: number,
-    z: number,
-    width: number,
-    depth: number,
-    height: number,
-    color: number,
-  ) => {
-    const building = new THREE.Group();
-    const walls = new THREE.Mesh(
-      new THREE.BoxGeometry(width, height, depth),
-      new THREE.MeshStandardMaterial({ color, roughness: 0.95 }),
-    );
-    walls.position.y = height / 2 + 1;
-    building.add(walls);
-    const roof = new THREE.Mesh(
-      new THREE.ConeGeometry(Math.max(width, depth) * 0.72, 5.5, 4),
-      new THREE.MeshStandardMaterial({ color: 0x704b38, roughness: 1 }),
-    );
-    roof.rotation.y = Math.PI / 4;
-    roof.position.y = height + 3.4;
-    building.add(roof);
-    building.position.set(x, 0, z);
-    structures.add(building);
-  };
-
-  for (let index = 0; index < 18; index += 1) {
-    const row = Math.floor(index / 6);
-    const column = index % 6;
-    addBuilding(
-      165 + column * 27 + (row % 2) * 8,
-      176 + row * 31,
-      13 + random() * 5,
-      11 + random() * 5,
-      8 + random() * 3,
-      wallPalette[index % wallPalette.length],
-    );
-  }
-  addBuilding(-310, 95, 36, 24, 13, 0xd4c19b);
-  addBuilding(-350, 128, 19, 17, 9, 0xc8d0c1);
-  addBuilding(390, -230, 42, 27, 14, 0xbda77f);
-  addBuilding(430, -205, 17, 16, 9, 0xd6d0bd);
-  scene.add(structures);
-
-  const siloMaterial = new THREE.MeshStandardMaterial({
-    color: 0xaab4b2,
-    roughness: 0.72,
-    metalness: 0.25,
-  });
-  for (const [x, z] of [
-    [-286, 118],
-    [418, -248],
-  ]) {
-    const silo = new THREE.Mesh(
-      new THREE.CylinderGeometry(7, 7.8, 25, 12),
-      siloMaterial,
-    );
-    silo.position.set(x, 13, z);
-    scene.add(silo);
-  }
-
-  const poleMaterial = new THREE.MeshStandardMaterial({
-    color: 0x4e3c2b,
+  const cloudDeckGroup = new THREE.Group();
+  const cloudDeckMaterial = new THREE.MeshStandardMaterial({
+    color: 0xe4e7e6,
+    emissive: 0xe4e7e6,
+    emissiveIntensity: 0.5,
     roughness: 1,
-  });
-  const poleGroup = new THREE.Group();
-  const wirePoints: THREE.Vector3[][] = [[], [], []];
-  for (let index = -9; index <= 9; index += 1) {
-    const z = index * 68;
-    const x = 128 + z * -0.04;
-    const pole = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.75, 1, 20, 7),
-      poleMaterial,
-    );
-    pole.position.set(x, 10.5, z);
-    poleGroup.add(pole);
-    const crossbar = new THREE.Mesh(
-      new THREE.BoxGeometry(12, 0.9, 0.9),
-      poleMaterial,
-    );
-    crossbar.position.set(x, 19.5, z);
-    poleGroup.add(crossbar);
-    wirePoints[0].push(new THREE.Vector3(x - 5, 19.6, z));
-    wirePoints[1].push(new THREE.Vector3(x, 20.4, z));
-    wirePoints[2].push(new THREE.Vector3(x + 5, 19.6, z));
-  }
-  const wireMaterial = new THREE.LineBasicMaterial({
-    color: 0x302b25,
     transparent: true,
-    opacity: 0.8,
+    opacity: 0,
+    depthWrite: false,
+    fog: false,
   });
-  for (const points of wirePoints) {
-    poleGroup.add(
-      new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), wireMaterial),
+  const cloudDeckGeometry = new THREE.SphereGeometry(1, 12, 8);
+  for (let index = 0; index < 132; index += 1) {
+    const angle = random() * Math.PI * 2;
+    const distance = Math.sqrt(random()) * 1_050;
+    const width = 88 + random() * 102;
+    const cloud = new THREE.Mesh(cloudDeckGeometry, cloudDeckMaterial);
+    const baseScale = new THREE.Vector3(
+      width * (1.2 + random() * 0.65),
+      width * (0.18 + random() * 0.13),
+      width,
     );
+    cloud.position.set(
+      Math.cos(angle) * distance,
+      315 + random() * 82,
+      Math.sin(angle) * distance,
+    );
+    cloud.scale.copy(baseScale).multiplyScalar(0.35);
+    cloud.userData.baseScale = baseScale;
+    cloud.userData.formationThreshold = random() * 0.62;
+    cloudDeckGroup.add(cloud);
   }
-  scene.add(poleGroup);
+  const fillerRowSpacing = 132;
+  const fillerColumnSpacing = 148;
+  for (let row = -9; row <= 9; row += 1) {
+    for (let column = -9; column <= 9; column += 1) {
+      const x =
+        column * fillerColumnSpacing +
+        (Math.abs(row) % 2) * fillerColumnSpacing * 0.5 +
+        (random() - 0.5) * 24;
+      const z =
+        row * fillerRowSpacing +
+        (random() - 0.5) * 24;
+      if (Math.hypot(x, z) > 1_180) continue;
+
+      const width = 132 + random() * 24;
+      const cloud = new THREE.Mesh(cloudDeckGeometry, cloudDeckMaterial);
+      const baseScale = new THREE.Vector3(
+        width * (1.38 + random() * 0.18),
+        width * (0.15 + random() * 0.07),
+        width * (0.98 + random() * 0.14),
+      );
+      cloud.position.set(x, 326 + random() * 42, z);
+      cloud.rotation.y = random() * Math.PI;
+      cloud.scale.copy(baseScale).multiplyScalar(0.35);
+      cloud.userData.baseScale = baseScale;
+      cloud.userData.formationThreshold = 0.06 + random() * 0.54;
+      cloudDeckGroup.add(cloud);
+    }
+  }
+  cloudDeckGroup.visible = false;
+  scene.add(cloudDeckGroup);
 
   const cloudGroup = new THREE.Group();
   const anvilCloudGroup = new THREE.Group();
+  const supercellCloudGroup = new THREE.Group();
+  const supercellCloudMaterial = cloudDeckMaterial.clone();
+  const addSupercellCloud = (
+    x: number,
+    y: number,
+    z: number,
+    width: number,
+    heightScale: number,
+    formationThreshold: number,
+  ) => {
+    const cloud = new THREE.Mesh(
+      cloudDeckGeometry,
+      supercellCloudMaterial,
+    );
+    const baseScale = new THREE.Vector3(
+      width * (1.15 + random() * 0.65),
+      width * heightScale,
+      width,
+    );
+    cloud.position.set(x, y, z);
+    cloud.scale.copy(baseScale).multiplyScalar(0.35);
+    cloud.userData.baseScale = baseScale;
+    cloud.userData.formationThreshold = formationThreshold;
+    supercellCloudGroup.add(cloud);
+  };
+
+  // Elevated precipitation-free base.
+  for (let index = 0; index < 30; index += 1) {
+    const angle = random() * Math.PI * 2;
+    const distance = Math.sqrt(random()) * 170;
+    const width = 34 + random() * 38;
+    addSupercellCloud(
+      Math.cos(angle) * distance,
+      184 + random() * 24,
+      Math.sin(angle) * distance * 0.72,
+      width,
+      0.34 + random() * 0.1,
+      random() * 0.48,
+    );
+  }
+
+  // Deep updraft tower rising from the base into the anvil.
+  for (let index = 0; index < 44; index += 1) {
+    const heightProgress = random();
+    const angle = random() * Math.PI * 2;
+    const distance =
+      Math.pow(random(), 0.62) *
+      THREE.MathUtils.lerp(82, 138, heightProgress);
+    const width = 36 + random() * 42 + heightProgress * 12;
+    addSupercellCloud(
+      -28 + Math.cos(angle) * distance,
+      202 + heightProgress * 132,
+      Math.sin(angle) * distance * 0.78,
+      width,
+      0.52 + random() * 0.2,
+      0.08 + random() * 0.48,
+    );
+  }
+
+  // Broad anvil bridge overlaps the physical cloud deck.
+  for (let index = 0; index < 36; index += 1) {
+    const angle = random() * Math.PI * 2;
+    const distance = Math.sqrt(random()) * 270;
+    const width = 54 + random() * 54;
+    addSupercellCloud(
+      34 + Math.cos(angle) * distance,
+      306 + random() * 42,
+      Math.sin(angle) * distance * 0.68,
+      width,
+      0.24 + random() * 0.1,
+      0.18 + random() * 0.5,
+    );
+  }
+
+  // Only the rotating wall cloud hangs below the elevated storm base.
+  for (let index = 0; index < 14; index += 1) {
+    const angle = random() * Math.PI * 2;
+    const distance = 12 + random() * 46;
+    const width = 22 + random() * 28;
+    addSupercellCloud(
+      Math.cos(angle) * distance,
+      150 + random() * 20,
+      Math.sin(angle) * distance * 0.68,
+      width,
+      0.32 + random() * 0.08,
+      0.38 + random() * 0.4,
+    );
+  }
+  anvilCloudGroup.add(supercellCloudGroup);
+
   const cloudVolumeMaterial = new THREE.ShaderMaterial({
     transparent: true,
-    depthWrite: false,
-    side: THREE.BackSide,
+    depthWrite: true,
+    depthTest: true,
+    side: THREE.DoubleSide,
     uniforms: {
       cameraLocal: { value: new THREE.Vector3() },
       time: { value: 0 },
@@ -807,12 +891,14 @@ const createWorld = (scene: THREE.Scene) => {
       }
     `,
   });
+  cloudVolumeMaterial.forceSinglePass = true;
   const cloudVolume = new THREE.Mesh(
     new THREE.BoxGeometry(1, 1, 1),
     cloudVolumeMaterial,
   );
   cloudVolume.position.set(0, 158, 0);
   cloudVolume.scale.set(350, 280, 245);
+  cloudVolume.visible = false;
   anvilCloudGroup.add(cloudVolume);
   cloudGroup.add(anvilCloudGroup);
   scene.add(cloudGroup);
@@ -864,30 +950,6 @@ const createWorld = (scene: THREE.Scene) => {
   const rain = new THREE.Points(rainGeometry, rainMaterial);
   scene.add(rain);
 
-  const rainCurtainCount = 780;
-  const rainCurtainPositions = new Float32Array(rainCurtainCount * 3);
-  const rainCurtainPhases = new Float32Array(rainCurtainCount);
-  const rainCurtainRadii = new Float32Array(rainCurtainCount);
-  const rainCurtainHeights = new Float32Array(rainCurtainCount);
-  const rainCurtainSpeeds = new Float32Array(rainCurtainCount);
-  for (let index = 0; index < rainCurtainCount; index += 1) {
-    rainCurtainPhases[index] = -1.9 + random() * 2.8;
-    rainCurtainRadii[index] = 20 + random() * 54;
-    rainCurtainHeights[index] = random();
-    rainCurtainSpeeds[index] = 0.7 + random() * 0.65;
-  }
-  const rainCurtainGeometry = new THREE.BufferGeometry();
-  rainCurtainGeometry.setAttribute(
-    "position",
-    new THREE.BufferAttribute(rainCurtainPositions, 3),
-  );
-  const rainCurtainMaterial = createRainMaterial();
-  rainCurtainMaterial.uniforms.color.value.set(0x91b0b5);
-  const rainCurtain = new THREE.Points(rainCurtainGeometry, rainCurtainMaterial);
-  rainCurtain.visible = false;
-  rainCurtain.renderOrder = 3;
-  scene.add(rainCurtain);
-
   const tornadoVolumeMaterial = createTornadoVolumeMaterial();
   const funnel = new THREE.Mesh(
     new THREE.BoxGeometry(1, 1, 1),
@@ -898,64 +960,92 @@ const createWorld = (scene: THREE.Scene) => {
   funnel.renderOrder = 2;
   scene.add(funnel);
 
-  const condensationCount = 420;
-  const condensationPositions = new Float32Array(condensationCount * 3);
-  const condensationPhases = new Float32Array(condensationCount);
-  const condensationHeights = new Float32Array(condensationCount);
-  const condensationRadii = new Float32Array(condensationCount);
-  const condensationSpeeds = new Float32Array(condensationCount);
-  for (let index = 0; index < condensationCount; index += 1) {
-    condensationPhases[index] = random() * Math.PI * 2;
-    condensationHeights[index] = Math.pow(random(), 0.82);
-    condensationRadii[index] = 0.7 + random() * 0.42;
-    condensationSpeeds[index] = 0.72 + random() * 0.72;
+  const tornadoConnectorGroup = new THREE.Group();
+  const connectorCore = new THREE.Mesh(
+    cloudDeckGeometry,
+    supercellCloudMaterial,
+  );
+  connectorCore.scale.set(1.3, 0.3, 1.15);
+  tornadoConnectorGroup.add(connectorCore);
+  for (let index = 0; index < 10; index += 1) {
+    const angle = (index / 10) * Math.PI * 2;
+    const connectorCloud = new THREE.Mesh(
+      cloudDeckGeometry,
+      supercellCloudMaterial,
+    );
+    connectorCloud.position.set(
+      Math.cos(angle) * 0.62,
+      -0.04 + (index % 3) * 0.035,
+      Math.sin(angle) * 0.62,
+    );
+    connectorCloud.scale.set(
+      0.62 + (index % 2) * 0.16,
+      0.2 + (index % 3) * 0.025,
+      0.54 + ((index + 1) % 3) * 0.08,
+    );
+    connectorCloud.rotation.y = angle * 0.7;
+    tornadoConnectorGroup.add(connectorCloud);
   }
-  const condensationGeometry = new THREE.BufferGeometry();
-  condensationGeometry.setAttribute(
-    "position",
-    new THREE.BufferAttribute(condensationPositions, 3),
-  );
-  const condensationMaterial = createVortexParticleMaterial(0xc3ccca, 2.8);
-  const condensation = new THREE.Points(
-    condensationGeometry,
-    condensationMaterial,
-  );
-  condensation.visible = false;
-  condensation.renderOrder = 3;
-  scene.add(condensation);
+  tornadoConnectorGroup.visible = false;
+  tornadoConnectorGroup.renderOrder = 1;
+  scene.add(tornadoConnectorGroup);
 
-  const dustCount = 320;
-  const dustPositions = new Float32Array(dustCount * 3);
-  const dustPhases = new Float32Array(dustCount);
-  const dustRadii = new Float32Array(dustCount);
-  const dustHeights = new Float32Array(dustCount);
-  const dustSpeeds = new Float32Array(dustCount);
-  for (let index = 0; index < dustCount; index += 1) {
-    const angle = random() * Math.PI * 2;
-    const radius = 3 + Math.pow(random(), 0.62) * 23;
-    dustPhases[index] = angle;
-    dustRadii[index] = radius;
-    dustHeights[index] = random();
-    dustSpeeds[index] = 0.65 + random() * 1.6;
-  }
-  const dustGeometry = new THREE.BufferGeometry();
-  dustGeometry.setAttribute(
-    "position",
-    new THREE.BufferAttribute(dustPositions, 3),
+  const groundDebrisMaterial = createGroundDebrisVolumeMaterial();
+  const groundDebris = new THREE.Mesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    groundDebrisMaterial,
   );
-  const dustMaterial = createVortexParticleMaterial(0x715b42, 3.2);
-  const dust = new THREE.Points(dustGeometry, dustMaterial);
-  dust.visible = false;
-  dust.renderOrder = 4;
-  scene.add(dust);
+  groundDebris.visible = false;
+  groundDebris.frustumCulled = false;
+  groundDebris.renderOrder = 3;
+  scene.add(groundDebris);
+
+  const debrisParticleCount = 1_600;
+  const debrisParticlePositions = new Float32Array(debrisParticleCount * 3);
+  const debrisParticlePhases = new Float32Array(debrisParticleCount);
+  const debrisParticleRadii = new Float32Array(debrisParticleCount);
+  const debrisParticleHeights = new Float32Array(debrisParticleCount);
+  const debrisParticleSpeeds = new Float32Array(debrisParticleCount);
+  for (let index = 0; index < debrisParticleCount; index += 1) {
+    debrisParticlePhases[index] = random() * Math.PI * 2;
+    debrisParticleRadii[index] = 0.16 + Math.pow(random(), 0.68) * 0.84;
+    debrisParticleHeights[index] = random();
+    debrisParticleSpeeds[index] = 0.65 + random() * 1.5;
+  }
+  const debrisParticleGeometry = new THREE.BufferGeometry();
+  debrisParticleGeometry.setAttribute(
+    "position",
+    new THREE.BufferAttribute(debrisParticlePositions, 3),
+  );
+  const debrisParticleMaterial = new THREE.PointsMaterial({
+    color: 0x75694f,
+    size: 0.32,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    depthTest: true,
+    sizeAttenuation: true,
+  });
+  const debrisParticles = new THREE.Points(
+    debrisParticleGeometry,
+    debrisParticleMaterial,
+  );
+  debrisParticles.visible = false;
+  debrisParticles.frustumCulled = false;
+  debrisParticles.renderOrder = 4;
+  scene.add(debrisParticles);
 
   return {
     skyUniforms,
     hemisphere,
     sun,
     stormLight,
+    cloudDeckGroup,
+    cloudDeckMaterial,
     cloudGroup,
     anvilCloudGroup,
+    supercellCloudGroup,
+    supercellCloudMaterial,
     cloudShadow,
     cloudShadowMaterial,
     cloudVolume,
@@ -963,29 +1053,18 @@ const createWorld = (scene: THREE.Scene) => {
     rain,
     rainGeometry,
     rainMaterial,
-    rainCurtain,
-    rainCurtainGeometry,
-    rainCurtainMaterial,
-    rainCurtainPhases,
-    rainCurtainRadii,
-    rainCurtainHeights,
-    rainCurtainSpeeds,
     funnel,
+    tornadoConnectorGroup,
     tornadoVolumeMaterial,
-    condensation,
-    condensationGeometry,
-    condensationMaterial,
-    condensationPhases,
-    condensationHeights,
-    condensationRadii,
-    condensationSpeeds,
-    dust,
-    dustGeometry,
-    dustMaterial,
-    dustPhases,
-    dustRadii,
-    dustHeights,
-    dustSpeeds,
+    groundDebris,
+    groundDebrisMaterial,
+    debrisParticles,
+    debrisParticleGeometry,
+    debrisParticleMaterial,
+    debrisParticlePhases,
+    debrisParticleRadii,
+    debrisParticleHeights,
+    debrisParticleSpeeds,
   };
 };
 
@@ -1221,10 +1300,8 @@ export default function StormScene({
         currentSnapshot.rainIntensity;
       world.skyUniforms.storminess.value = storminess;
       world.skyUniforms.lightning.value = lightningFlash;
-      world.skyUniforms.cloudDeck.value = currentSnapshot.cloudCover;
-      world.skyUniforms.time.value = elapsed;
-      world.hemisphere.intensity = 2.2 - storminess * 0.85;
-      world.sun.intensity = 2.1 - storminess * 1.35 + lightningFlash * 0.8;
+      world.hemisphere.intensity = 2.2 - storminess * 1.25;
+      world.sun.intensity = 2.1 - storminess * 1.8 + lightningFlash * 0.8;
       world.hemisphere.color.setRGB(
         0.72 - storminess * 0.26,
         0.82 - storminess * 0.28,
@@ -1240,25 +1317,109 @@ export default function StormScene({
         0.9 - storminess * 0.15,
         0.74 - storminess * 0.2,
       );
-      renderer.toneMappingExposure = 1.08 - storminess * 0.2 + lightningFlash * 0.16;
+      renderer.toneMappingExposure =
+        1.08 - storminess * 0.32 + lightningFlash * 0.16;
+      const fogWhitening = THREE.MathUtils.clamp(
+        storminess * 0.75 + currentSnapshot.rainIntensity * 0.5,
+        0,
+        1,
+      );
       if (scene.fog instanceof THREE.FogExp2) {
         scene.fog.density =
-          0.00048 + storminess * 0.00055 + currentSnapshot.rainIntensity * 0.00035;
+          0.00048 +
+          storminess * 0.00065 +
+          currentSnapshot.rainIntensity * 0.00075;
         scene.fog.color.setRGB(
-          0.54 - storminess * 0.24,
-          0.61 - storminess * 0.25,
-          0.58 - storminess * 0.24,
+          THREE.MathUtils.lerp(0.56, 0.72, fogWhitening),
+          THREE.MathUtils.lerp(0.63, 0.76, fogWhitening),
+          THREE.MathUtils.lerp(0.61, 0.8, fogWhitening),
         );
+        world.skyUniforms.hazeColor.value.copy(scene.fog.color);
+      }
+      world.skyUniforms.hazeStrength.value =
+        fogWhitening *
+        (0.72 + currentSnapshot.rainIntensity * 0.22);
+
+      let cloudDeckFormation = 1;
+      let supercellFormation = 1;
+      if (currentSnapshot.stage === "calma") {
+        cloudDeckFormation = 0;
+        supercellFormation = 0;
+      } else if (currentSnapshot.stage === "cumulogenesis") {
+        cloudDeckFormation = currentSnapshot.stageProgress;
+        supercellFormation = 0;
+      } else if (currentSnapshot.stage === "desarrollo") {
+        supercellFormation = currentSnapshot.stageProgress;
+      } else if (currentSnapshot.stage === "disipacion") {
+        cloudDeckFormation = 1 - currentSnapshot.stageProgress;
+        supercellFormation = 1 - currentSnapshot.stageProgress;
       }
 
-      world.cloudGroup.visible = currentSnapshot.stormVisible;
+      world.cloudDeckGroup.visible = cloudDeckFormation > 0.01;
+      world.cloudDeckGroup.position.set(
+        currentSnapshot.stormPosition.x,
+        0,
+        currentSnapshot.stormPosition.z,
+      );
+      world.cloudDeckGroup.rotation.y += weatherDelta * 0.0025;
+      world.cloudDeckMaterial.opacity =
+        cloudDeckFormation * (0.5 + currentSnapshot.cloudCover * 0.42);
+      const cloudDarkening = THREE.MathUtils.clamp(
+        cloudDeckFormation * 0.68 + supercellFormation * 0.42,
+        0,
+        1,
+      );
+      world.cloudDeckMaterial.color.setRGB(
+        THREE.MathUtils.lerp(0.72, 0.2, cloudDarkening),
+        THREE.MathUtils.lerp(0.74, 0.23, cloudDarkening),
+        THREE.MathUtils.lerp(0.75, 0.25, cloudDarkening),
+      );
+      world.cloudDeckMaterial.emissive.copy(
+        world.cloudDeckMaterial.color,
+      );
+      for (const cloud of world.cloudDeckGroup.children) {
+        const threshold = cloud.userData.formationThreshold as number;
+        const growth = THREE.MathUtils.smoothstep(
+          cloudDeckFormation,
+          threshold,
+          Math.min(1, threshold + 0.22),
+        );
+        cloud.visible = growth > 0.01;
+        cloud.scale
+          .copy(cloud.userData.baseScale as THREE.Vector3)
+          .multiplyScalar(THREE.MathUtils.lerp(0.35, 1, growth));
+      }
+
+      world.cloudGroup.visible =
+        currentSnapshot.stormVisible && supercellFormation > 0.01;
+      world.supercellCloudMaterial.opacity =
+        supercellFormation * (0.5 + currentSnapshot.cloudCover * 0.42);
+      world.supercellCloudMaterial.color.copy(
+        world.cloudDeckMaterial.color,
+      );
+      world.supercellCloudMaterial.emissive.copy(
+        world.cloudDeckMaterial.color,
+      );
+      for (const cloud of world.supercellCloudGroup.children) {
+        const threshold = cloud.userData.formationThreshold as number;
+        const growth = THREE.MathUtils.smoothstep(
+          supercellFormation,
+          threshold,
+          Math.min(1, threshold + 0.24),
+        );
+        cloud.visible = growth > 0.01;
+        cloud.scale
+          .copy(cloud.userData.baseScale as THREE.Vector3)
+          .multiplyScalar(THREE.MathUtils.lerp(0.35, 1, growth));
+      }
       world.cloudGroup.position.set(
         currentSnapshot.stormPosition.x,
         0,
         currentSnapshot.stormPosition.z,
       );
       const horizontalCloudScale =
-        0.38 + currentSnapshot.cloudCover * 0.82;
+        (0.38 + currentSnapshot.cloudCover * 0.82) *
+        THREE.MathUtils.lerp(0.55, 1, supercellFormation);
       world.cloudGroup.scale.set(
         horizontalCloudScale,
         1,
@@ -1307,14 +1468,10 @@ export default function StormScene({
           currentSnapshot.stormPosition.z) /
           cloudScaleZ,
       );
-      const cloudScale = world.cloudGroup.scale.y;
       const cloudBaseHeight =
-        cloudScale *
+        world.cloudGroup.scale.y *
         (world.anvilCloudGroup.position.y +
-          world.anvilCloudGroup.scale.y *
-            (world.cloudVolume.position.y +
-              world.cloudVolumeMaterial.uniforms.cloudProfileA.value.x *
-                world.cloudVolume.scale.y));
+          world.anvilCloudGroup.scale.y * 138);
       world.stormLight.position.set(
         currentSnapshot.stormPosition.x - 28,
         135,
@@ -1323,19 +1480,18 @@ export default function StormScene({
       world.stormLight.intensity = lightningFlash * 18;
       world.cloudVolumeMaterial.uniforms.time.value = elapsed;
       world.cloudVolumeMaterial.uniforms.storminess.value = storminess;
-      world.cloudVolumeMaterial.uniforms.opacity.value =
-        currentSnapshot.stormVisible
-          ? 0.68 + currentSnapshot.cloudCover * 0.28
-          : 0;
-      world.cloudShadow.visible = currentSnapshot.stormVisible;
+      world.cloudVolumeMaterial.uniforms.opacity.value = 0;
+      world.cloudShadow.visible =
+        currentSnapshot.stormVisible && supercellFormation > 0.01;
       world.cloudShadow.position.x = currentSnapshot.stormPosition.x + 18;
       world.cloudShadow.position.z = currentSnapshot.stormPosition.z + 12;
       world.cloudShadow.scale.setScalar(
         145 + currentSnapshot.cloudCover * 165,
       );
       world.cloudShadowMaterial.uniforms.opacity.value =
-        currentSnapshot.cloudCover * 0.2 +
-        currentSnapshot.rainIntensity * 0.12;
+        (currentSnapshot.cloudCover * 0.2 +
+          currentSnapshot.rainIntensity * 0.12) *
+        supercellFormation;
 
       const ambientRain = THREE.MathUtils.smoothstep(
         currentSnapshot.cloudCover,
@@ -1373,58 +1529,7 @@ export default function StormScene({
 
       const intensity = currentSnapshot.tornadoIntensity;
       const { x: tornadoX, z: tornadoZ } = currentSnapshot.tornadoPosition;
-      world.rainCurtain.visible =
-        currentSnapshot.stormVisible &&
-        currentSnapshot.supercell.rfdIntensity > 0.03;
-      const rfdBlend = currentSnapshot.supercell.hookStrength * 0.55;
-      world.rainCurtain.position.set(
-        THREE.MathUtils.lerp(
-          currentSnapshot.supercell.rfdPosition.x,
-          currentSnapshot.supercell.mesocyclonePosition.x,
-          rfdBlend,
-        ),
-        0,
-        THREE.MathUtils.lerp(
-          currentSnapshot.supercell.rfdPosition.z,
-          currentSnapshot.supercell.mesocyclonePosition.z,
-          rfdBlend,
-        ),
-      );
-      world.rainCurtain.rotation.y =
-        currentSnapshot.supercell.tailCloudDirectionRadians;
-      world.rainCurtainMaterial.uniforms.opacity.value =
-        currentSnapshot.supercell.rfdIntensity *
-        (0.2 + currentSnapshot.supercell.hookStrength * 0.42);
-      world.rainCurtainMaterial.uniforms.pointSize.value =
-        2.2 + currentSnapshot.supercell.rfdIntensity * 1.5;
-      if (world.rainCurtain.visible) {
-        const rainCurtainPosition = world.rainCurtainGeometry.attributes
-          .position as THREE.BufferAttribute;
-        for (let index = 0; index < rainCurtainPosition.count; index += 1) {
-          const phase =
-            world.rainCurtainPhases[index] +
-            elapsed * world.rainCurtainSpeeds[index] * (0.22 + intensity * 0.48);
-          const radius =
-            world.rainCurtainRadii[index] * (0.82 + intensity * 0.22);
-          const fall =
-            (world.rainCurtainHeights[index] -
-              elapsed * world.rainCurtainSpeeds[index] * 0.34) %
-            1;
-          const height = (fall < 0 ? fall + 1 : fall) * 105 + 4;
-          rainCurtainPosition.setXYZ(
-            index,
-            Math.cos(phase) * radius,
-            height,
-            Math.sin(phase) * radius * 0.78,
-          );
-        }
-        rainCurtainPosition.needsUpdate = true;
-      }
-      world.funnel.visible = currentSnapshot.condensationOpacity > 0.01;
-      world.condensation.visible = world.funnel.visible;
-      world.dust.visible = currentSnapshot.debrisIntensity > 0.015;
-      world.condensation.position.set(tornadoX, 1, tornadoZ);
-      world.dust.position.set(tornadoX, 1.5, tornadoZ);
+      world.funnel.visible = currentSnapshot.tornadoActive;
       const baseRadius = THREE.MathUtils.clamp(
         currentSnapshot.tornadoRadiusMeters * 0.72,
         1.7,
@@ -1440,9 +1545,9 @@ export default function StormScene({
         cloudBaseHeight - 1 + 0.5,
       );
       const connectionOverlap = THREE.MathUtils.clamp(
-        topRadius * 0.45,
-        10,
-        20,
+        topRadius * 0.12,
+        2,
+        6,
       );
       const volumeHeight = funnelHeight + connectionOverlap;
       world.funnel.position.set(tornadoX, 1 + volumeHeight * 0.5, tornadoZ);
@@ -1451,81 +1556,163 @@ export default function StormScene({
         volumeHeight,
         topRadius * 2.6,
       );
+      world.tornadoConnectorGroup.visible =
+        currentSnapshot.tornadoActive && supercellFormation > 0.01;
+      world.tornadoConnectorGroup.position.set(
+        tornadoX,
+        cloudBaseHeight + 2,
+        tornadoZ,
+      );
+      world.tornadoConnectorGroup.scale.set(
+        topRadius * 1.05,
+        22 + intensity * 8,
+        topRadius * 1.05,
+      );
+      world.tornadoConnectorGroup.rotation.y +=
+        weatherDelta * (0.22 + intensity * 0.38);
       world.tornadoVolumeMaterial.uniforms.time.value = elapsed;
       world.tornadoVolumeMaterial.uniforms.intensity.value = intensity;
+      world.tornadoVolumeMaterial.uniforms.funnelReach.value =
+        currentSnapshot.funnelReach;
       world.tornadoVolumeMaterial.uniforms.condensation.value =
-        currentSnapshot.condensationOpacity;
+        currentSnapshot.tornadoActive
+          ? Math.max(
+              currentSnapshot.condensationOpacity * 0.88,
+              0.72 + intensity * 0.18,
+            )
+          : 0;
       world.tornadoVolumeMaterial.uniforms.baseRadiusRatio.value =
         baseRadius / (topRadius * 2.6);
       world.tornadoVolumeMaterial.uniforms.cloudBaseRatio.value =
         funnelHeight / volumeHeight;
       world.tornadoVolumeMaterial.uniforms.storminess.value = storminess;
-      world.condensationMaterial.uniforms.opacity.value =
-        currentSnapshot.condensationOpacity * (0.08 + intensity * 0.08);
-      world.condensationMaterial.uniforms.pointSize.value =
-        1.15 + intensity * 0.65;
-      world.dustMaterial.uniforms.opacity.value =
-        currentSnapshot.debrisIntensity * (0.44 + intensity * 0.42);
-      world.dustMaterial.uniforms.pointSize.value =
-        2.1 + intensity * 2.2;
+      world.tornadoVolumeMaterial.uniforms.cloudColor.value.setRGB(
+        THREE.MathUtils.lerp(0.72, 0.32, cloudDarkening),
+        THREE.MathUtils.lerp(0.74, 0.35, cloudDarkening),
+        THREE.MathUtils.lerp(0.75, 0.38, cloudDarkening),
+      );
 
-      if (world.funnel.visible) {
-        const condensationPosition = world.condensationGeometry.attributes
-          .position as THREE.BufferAttribute;
-        for (let index = 0; index < condensationPosition.count; index += 1) {
-          const height = world.condensationHeights[index];
-          const phase =
-            world.condensationPhases[index] +
-            elapsed *
-              world.condensationSpeeds[index] *
-              (2.2 + intensity * 2.4) *
-              (1.1 - height * 0.28);
-          const funnelRadius =
-            THREE.MathUtils.lerp(
-              baseRadius,
-              topRadius,
-              Math.pow(height, 1.12),
-            ) *
-            world.condensationRadii[index];
-          const sway = height * height * (2.5 + intensity * 5.5);
-          condensationPosition.setXYZ(
-            index,
-            Math.cos(phase) * funnelRadius +
-              Math.sin(elapsed * 0.48 + height * 6.4) * sway,
-            height * funnelHeight,
-            Math.sin(phase) * funnelRadius +
-              Math.cos(elapsed * 0.41 + height * 5.1) * sway * 0.72,
+      const contactGrowth = THREE.MathUtils.smoothstep(
+        currentSnapshot.funnelReach,
+        0.82,
+        1,
+      );
+      const contactDecay =
+        1 -
+        THREE.MathUtils.smoothstep(
+          currentSnapshot.tornadoLifeProgress,
+          0.86,
+          1,
+        );
+      const surfaceActivity =
+        Math.max(contactGrowth * 0.16, currentSnapshot.groundCirculation) *
+        contactDecay;
+      const debrisRadius = THREE.MathUtils.clamp(
+        8 +
+          currentSnapshot.tornadoRadiusMeters *
+            (1.55 + surfaceActivity * 1.1),
+        12,
+        65,
+      );
+      const debrisHeight = 5 + surfaceActivity * 20;
+      world.groundDebris.visible = false;
+      world.groundDebris.position.set(
+        tornadoX,
+        0.7 + debrisHeight * 0.5,
+        tornadoZ,
+      );
+      world.groundDebris.scale.set(
+        debrisRadius * 2.25,
+        debrisHeight,
+        debrisRadius * 2,
+      );
+      world.groundDebrisMaterial.uniforms.time.value = elapsed;
+      world.groundDebrisMaterial.uniforms.intensity.value = intensity;
+      world.groundDebrisMaterial.uniforms.circulation.value =
+        surfaceActivity;
+      world.groundDebrisMaterial.uniforms.debris.value =
+        THREE.MathUtils.clamp(
+          surfaceActivity *
+            (0.28 +
+              currentSnapshot.debrisIntensity * 0.72 +
+              currentSnapshot.rainIntensity * 0.2),
+          0,
+          1,
+        );
+      world.groundDebrisMaterial.uniforms.rain.value =
+        currentSnapshot.rainIntensity;
+      world.groundDebrisMaterial.uniforms.motionDirection.value.set(
+        Math.cos(currentSnapshot.stormMotion.directionRadians),
+        Math.sin(currentSnapshot.stormMotion.directionRadians),
+      );
+      if (scene.fog instanceof THREE.FogExp2) {
+        const debrisDistance = camera.position.distanceTo(
+          world.groundDebris.position,
+        );
+        world.groundDebrisMaterial.uniforms.fogAmount.value =
+          1 -
+          Math.exp(
+            -scene.fog.density *
+              scene.fog.density *
+              debrisDistance *
+              debrisDistance,
           );
-        }
-        condensationPosition.needsUpdate = true;
+        world.groundDebrisMaterial.uniforms.fogColor.value.copy(
+          scene.fog.color,
+        );
       }
 
-      if (world.dust.visible) {
-        const dustPosition = world.dustGeometry.attributes
+      const particleActivity =
+        surfaceActivity * currentSnapshot.debrisIntensity;
+      world.debrisParticles.visible =
+        currentSnapshot.tornadoActive && particleActivity > 0.01;
+      world.debrisParticles.position.set(tornadoX, 0.5, tornadoZ);
+      world.debrisParticleMaterial.opacity =
+        particleActivity * (0.3 + intensity * 0.5);
+      world.debrisParticleMaterial.size = 0.22 + intensity * 0.18;
+      world.debrisParticleMaterial.color.setRGB(
+        THREE.MathUtils.lerp(0.45, 0.48, currentSnapshot.rainIntensity),
+        THREE.MathUtils.lerp(0.39, 0.5, currentSnapshot.rainIntensity),
+        THREE.MathUtils.lerp(0.28, 0.52, currentSnapshot.rainIntensity),
+      );
+      if (world.debrisParticles.visible) {
+        const positions = world.debrisParticleGeometry.attributes
           .position as THREE.BufferAttribute;
-        for (let index = 0; index < dustPosition.count; index += 1) {
-          const phase =
-            world.dustPhases[index] +
-            elapsed *
-              world.dustSpeeds[index] *
-              (0.9 + intensity * 3.2);
-          const radius = Math.min(
-            world.dustRadii[index] *
-              (0.44 + currentSnapshot.groundCirculation * 0.72 + intensity * 0.16),
-            32,
-          );
-          const risingHeight =
-            (world.dustHeights[index] +
-              elapsed * world.dustSpeeds[index] * 0.045) %
+        const rotationSign =
+          currentSnapshot.supercell.rotationDirection === "clockwise"
+            ? -1
+            : 1;
+        const motionX = Math.cos(
+          currentSnapshot.stormMotion.directionRadians,
+        );
+        const motionZ = Math.sin(
+          currentSnapshot.stormMotion.directionRadians,
+        );
+        for (let index = 0; index < positions.count; index += 1) {
+          const rise =
+            (world.debrisParticleHeights[index] +
+              elapsed * world.debrisParticleSpeeds[index] * 0.055) %
             1;
-          dustPosition.setXYZ(
+          const angle =
+            world.debrisParticlePhases[index] +
+            rotationSign *
+              elapsed *
+              world.debrisParticleSpeeds[index] *
+              (1.1 + intensity * 2);
+          const radius =
+            debrisRadius *
+            world.debrisParticleRadii[index] *
+            (0.5 + surfaceActivity * 0.5) *
+            (1 - rise * 0.18);
+          const drift = rise * debrisRadius * 0.18;
+          positions.setXYZ(
             index,
-            Math.cos(phase) * radius,
-            risingHeight * Math.min(23, 5 + currentSnapshot.debrisIntensity * 16 + intensity * 5),
-            Math.sin(phase) * radius,
+            Math.cos(angle) * radius + motionX * drift,
+            rise * (4 + surfaceActivity * 15),
+            Math.sin(angle) * radius + motionZ * drift,
           );
         }
-        dustPosition.needsUpdate = true;
+        positions.needsUpdate = true;
       }
 
       stormTarget.set(
@@ -1599,6 +1786,14 @@ export default function StormScene({
       world.funnel.worldToLocal(
         world.tornadoVolumeMaterial.uniforms.cameraLocal.value,
       );
+      if (world.groundDebris.visible) {
+        world.groundDebrisMaterial.uniforms.cameraLocal.value.copy(
+          camera.position,
+        );
+        world.groundDebris.worldToLocal(
+          world.groundDebrisMaterial.uniforms.cameraLocal.value,
+        );
+      }
       renderer.render(scene, camera);
     };
 

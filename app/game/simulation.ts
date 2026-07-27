@@ -421,6 +421,9 @@ export class WeatherSimulation {
       : progress > tornadoEnd
         ? 1
         : 0;
+    const funnelReach = tornadoActive
+      ? smoothstep(0.02, 0.32, tornadoLifeProgress)
+      : 0;
     const intensification = smoothstep(0.02, 0.3, tornadoLifeProgress);
     const weakening = 1 - smoothstep(0.7, 1, tornadoLifeProgress);
     const intensityEnvelope = tornadoActive
@@ -440,7 +443,7 @@ export class WeatherSimulation {
       : 0;
     const groundCirculation = tornadoActive
       ? clamp(
-          smoothstep(0.02, 0.16, tornadoLifeProgress) *
+          smoothstep(0.28, 0.4, tornadoLifeProgress) *
             (1 - smoothstep(0.86, 1, tornadoLifeProgress)) *
             Math.pow(tornadoIntensity, 0.62),
         )
@@ -539,6 +542,7 @@ export class WeatherSimulation {
       stormVisible: progress >= 0.075 && progress <= 0.98,
       tornadoActive,
       tornadoLifeProgress,
+      funnelReach,
       tornadoIntensity,
       tornadoPosition,
       tornadoRadiusMeters,
